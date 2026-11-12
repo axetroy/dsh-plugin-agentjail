@@ -45,16 +45,16 @@ a security regression, not a style disagreement.
 
 ## Layout
 
-| Path | Role |
-|---|---|
-| `src/index.ts` | `apply()`, listener registration, `ctx.provide('agentjail', …)` |
-| `src/hooks/` | `tools/pre-execute` gate, post-execute observer, approval answerer |
-| `src/security/` | decision resolution, normalization, grants, policy templates, redaction |
-| `src/adapter/` | socket connection, protocol frames, caching client |
-| `src/audit/`, `src/governance/` | audit trail, metrics, reports |
-| `src/config/schema.ts` | Schemastery config; `Config` interface + schema export |
-| `policy/` | Generated Rego bundle (see below) |
-| `scripts/` | CI helper checks (`check-exports.mjs`, `check-bundle.mjs`) |
+| Path                            | Role                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `src/index.ts`                  | `apply()`, listener registration, `ctx.provide('agentjail', …)`         |
+| `src/hooks/`                    | `tools/pre-execute` gate, post-execute observer, approval answerer      |
+| `src/security/`                 | decision resolution, normalization, grants, policy templates, redaction |
+| `src/adapter/`                  | socket connection, protocol frames, caching client                      |
+| `src/audit/`, `src/governance/` | audit trail, metrics, reports                                           |
+| `src/config/schema.ts`          | Schemastery config; `Config` interface + schema export                  |
+| `policy/`                       | Generated Rego bundle (see below)                                       |
+| `scripts/`                      | CI helper checks (`check-exports.mjs`, `check-bundle.mjs`)              |
 
 ## Policy templates are generated
 

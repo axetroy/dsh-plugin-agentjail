@@ -15,6 +15,10 @@ npm run verify
 `npm run verify` runs format checking, lint, typecheck, tests, and the build. It
 is the same sequence CI runs, so a green run locally means a green run there.
 
+The Node floor is `22.18.0`, not because the runtime code needs it but because
+the build toolchain (`tsdown` and its rolldown plugin) does, and `prepare` runs
+the build during `npm ci`. Node 22.18 and 24 are both tested in CI.
+
 ## The one rule that matters
 
 **Any change touching the enforcement path must explain why it cannot turn a deny

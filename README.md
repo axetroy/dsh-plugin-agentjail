@@ -86,7 +86,7 @@ tools.
 
 ### Requirements
 
-- Node.js `>=20.10.0`
+- Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
 - A reachable AgentJail daemon
 

@@ -28,8 +28,10 @@ describe('package manifest', () => {
     expect(manifest.engines['dsh']).toMatch(/^>=/)
   })
 
-  it('declares the Node range the code actually requires', () => {
-    expect(manifest.engines['node']).toMatch(/^>=20/)
+  it('declares a Node range the build toolchain can actually run', () => {
+    // tsdown and its rolldown plugin require Node 22.18+, and `prepare` runs the
+    // build on install, so the floor cannot be lower than the toolchain's.
+    expect(manifest.engines['node']).toMatch(/^>=22\.18/)
   })
 
   it('ships every artifact a consumer needs', () => {

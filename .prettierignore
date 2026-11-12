@@ -7,3 +7,6 @@ pnpm-lock.yaml
 # The design white paper is an authored document; reformatting it would churn
 # the diff for every future change.
 DESIGN.md
+
+# Version pin files have no parser and nothing to format.
+.nvmrc
