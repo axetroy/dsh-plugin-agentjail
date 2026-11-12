@@ -1,0 +1,61 @@
+name: Bug report
+description: Report behavior that differs from the documentation
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste real credentials or unredacted audit records. The plugin
+        redacts by default; if you must share a record, redact it yourself first.
+
+        For a security vulnerability, do not open an issue. Follow SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      description: Output of `npm ls dsh-plugin-agentjail`.
+    validations:
+      required: true
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DeepSeek Harness version
+    validations:
+      required: true
+  - type: input
+    id: agentjail-version
+    attributes:
+      label: AgentJail version
+    validations:
+      required: true
+  - type: dropdown
+    id: enforcement
+    attributes:
+      label: Enforcement mode
+      options: [enforce, monitor]
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: The `agentjail` row from your cordis.patch.yml, with secrets removed.
+      render: yaml
+  - type: textarea
+    id: audit
+    attributes:
+      label: Relevant audit records
+      description: Redacted records, if the issue concerns a decision.
+      render: json

@@ -1,0 +1,76 @@
+# Example: enforce a reviewed posture.
+#
+# Use as a profile overlay:
+#
+#   dsh --profile secure --patch ./examples/enforce.patch.yml
+#
+# This is the configuration the shipped bundle patch already applies, written out
+# in full so it can be copied and edited. A patch replaces a row's whole `config`
+# value, so every key you keep must be restated here.
+
+- insert:
+    - id: agentjail
+      name: dsh-plugin-agentjail
+      config:
+        # Apply verdicts. Nothing here is recorded-and-ignored.
+        enforcement: enforce
+
+        # Empty resolves $AGENTJAIL_SOCKET, then ~/.agentjail/daemon.sock.
+        socketPath: ''
+
+        timeoutMs: 2000
+
+        # Fail closed on every transport problem. Do not change these to allow.
+        failureAction: deny
+        defaultAction: deny
+
+        # Surface an engine ask through the Harness approval service. With no
+        # answerer composed, it resolves to a denial.
+        askAction: ask
+        askFallback: native
+
+        healthCheckOnLoad: true
+        healthCheckIntervalMs: 30000
+
+        # Re-assert denials so a later listener cannot re-open a blocked call.
+        monotonicGuard: true
+
+        # Empty: every tool is policy-governed.
+        exemptTools: []
+        exemptToolPrefixes: []
+
+        cache:
+          enabled: true
+          maxEntries: 1024
+          ttlMs: 5000
+
+        audit:
+          enabled: true
+          storage: file
+          # Empty resolves $AGENTJAIL_DSH_AUDIT_PATH, then ~/.agentjail/dsh-audit.jsonl.
+          filePath: ''
+          maxFileBytes: 8388608
+          maxRotatedFiles: 5
+          # Leave on: tool arguments routinely carry credentials.
+          redactSensitiveData: true
+          maxValueChars: 256
+
+        approval:
+          grantsEnabled: true
+          sessionGrantTtlMs: 3600000
+          maxGrants: 512
+
+        governance:
+          alertsEnabled: true
+          denyRateAlertThreshold: 0.5
+          denyRateAlertMinSamples: 20
+          statsWindowMs: 300000
+          includePolicyDigest: true
+
+        # Render these templates to the daemon's policy directory on load. The
+        # names are the ones documented in docs/POLICY.md; an unknown name is a
+        # load error rather than a silently weaker policy.
+        policyContext:
+          attributes:
+            templates: 'read-only,no-credential-access,no-remote-execution'
+            templateDirectory: '/etc/agentjail/policies'

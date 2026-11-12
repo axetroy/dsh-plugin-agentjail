@@ -1,0 +1,6 @@
+# Every change to the enforcement path needs an owner review, because a mistake
+# here fails open rather than loudly.
+/src/security/           @axetroy
+/src/hooks/              @axetroy
+/src/index.ts            @axetroy
+/.github/workflows/      @axetroy

@@ -1,0 +1,19 @@
+dsh-plugin-agentjail
+Copyright 2026 the dsh-plugin-agentjail contributors
+
+This product includes software developed at the dsh-plugin-agentjail project
+(https://github.com/axetroy/dsh-plugin-agentjail).
+
+It integrates with AgentJail (https://github.com/LuD1161/agentjail), which is
+distributed under its own license. AgentJail is a separate program, not bundled
+here; the plugin communicates with it over a local Unix domain socket. Review
+AgentJail's license before deploying the two together.
+
+Open Policy Agent (https://www.openpolicyagent.org/) and the Rego language are
+projects of the Cloud Native Computing Foundation. Neither is bundled here. The
+Rego policy templates under policy/ are original work of this project and are
+licensed under the same terms as the rest of the source.
+
+The Claude Code hook vocabulary that AgentJail and this plugin both speak
+(`PreToolUse`, `tool_name`, `tool_input`) is used for interoperability. No
+Anthropic source code is included.

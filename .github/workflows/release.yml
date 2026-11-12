@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and pack without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify
+        run: npm run lint && npm run typecheck && npm run test && npm run build
+
+      - name: Check the tag matches package.json
+        if: github.event_name == 'push'
+        run: |
+          node -e "
+            const pkg = require('./package.json')
+            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, '')
+            if (pkg.version !== tag) {
+              throw new Error('tag v' + tag + ' does not match package.json version ' + pkg.version)
+            }
+            console.log('tag matches version', pkg.version)
+          "
+
+      - name: Pack
+        run: npm pack --dry-run
+
+      - name: Publish
+        if: github.event_name == 'push'
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: GitHub release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false

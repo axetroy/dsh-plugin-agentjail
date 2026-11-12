@@ -1,0 +1,66 @@
+# Example: trial a policy without blocking anything.
+#
+# Use as a profile overlay:
+#
+#   dsh --profile trial --patch ./examples/monitor.patch.yml
+#
+# Monitor mode records every verdict and blocks nothing. Run it for a day or a
+# week on a real workload, then read the audit trail to find out which rules would
+# have blocked legitimate work, fix those rules, and switch to enforce.
+#
+# Monitor mode is not a security mode. An agent running under it is unconstrained.
+
+- insert:
+    - id: agentjail
+      name: dsh-plugin-agentjail
+      config:
+        # Records what it would have done. Blocks nothing.
+        enforcement: monitor
+
+        socketPath: ''
+        timeoutMs: 2000
+
+        # In monitor mode these are recorded as the would-be verdict but never
+        # applied. Keep them fail-closed anyway, so flipping to enforce later
+        # does not also change the failure behavior.
+        failureAction: deny
+        defaultAction: deny
+
+        askAction: ask
+        askFallback: native
+
+        healthCheckOnLoad: true
+        healthCheckIntervalMs: 30000
+
+        monotonicGuard: true
+
+        exemptTools: []
+        exemptToolPrefixes: []
+
+        cache:
+          enabled: true
+          maxEntries: 1024
+          ttlMs: 5000
+
+        audit:
+          enabled: true
+          # A dedicated file, so the trial is easy to analyze and to delete.
+          storage: file
+          filePath: '/tmp/agentjail-monitor.jsonl'
+          maxFileBytes: 33554432
+          maxRotatedFiles: 5
+          redactSensitiveData: true
+          maxValueChars: 256
+
+        approval:
+          # Nothing is blocked in monitor mode, so nothing is ever approved.
+          grantsEnabled: false
+          sessionGrantTtlMs: 3600000
+          maxGrants: 512
+
+        governance:
+          alertsEnabled: true
+          denyRateAlertThreshold: 0.5
+          denyRateAlertMinSamples: 20
+          statsWindowMs: 300000
+          includePolicyDigest: true
