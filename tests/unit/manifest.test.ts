@@ -40,6 +40,7 @@ describe('package manifest', () => {
       'cordis.patch.yml',
       'policy',
       'README.md',
+      'README.zh-CN.md',
       'LICENSE',
       'NOTICE',
       'CHANGELOG.md',

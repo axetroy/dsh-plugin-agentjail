@@ -98,6 +98,17 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}' \
   The fake daemon has a separate `control()` reply for health pings.
 - Do not mock what you can instantiate.
 
+## Documentation is bilingual
+
+`README.md` (English) and `README.zh-CN.md` (Simplified Chinese) are parallel
+documents, and each links to the other at the top. `tests/unit/readme.test.ts`
+fails if they drift: same section count, same fenced code blocks in the same
+order, and the same install commands, API surface, default verdicts, and Node
+floor. When you change one, change the other in the same commit.
+
+`DESIGN.md` is the Chinese white paper and is the source of record for the
+design; `docs/` is English only.
+
 ## Formatting
 
 Prettier formats everything except `DESIGN.md` (authored prose, see

@@ -1,5 +1,7 @@
 # dsh-plugin-agentjail
 
+**English** | [简体中文](./README.zh-CN.md)
+
 An AI agent tool security gateway for DeepSeek Harness.
 
 Every tool call an agent makes passes through this plugin before it reaches the

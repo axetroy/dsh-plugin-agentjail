@@ -9,6 +9,31 @@ changes are always called out under `### Changed` or `### Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- A Simplified Chinese README (`README.zh-CN.md`), with language links in both
+  directions. A test asserts the two stay structurally in sync, so a translated
+  section cannot silently fall behind the English one.
+
+### Changed
+
+- The Node floor is `>=22.18.0`, raised from `>=20.10.0`. The `prepare` script
+  runs `tsdown` on install, and its rolldown plugin requires Node `^22.18.0`, so
+  the previous floor described a version the package could not install on. CI
+  now tests Node 22 and 24.
+- `npm run verify` runs `format:check` first, so the local command and CI run the
+  same sequence.
+
+### Fixed
+
+- The generated Rego templates were rejected by OPA: they used v0 syntax, mixed
+  statements into object literals, declared `deny_rules` in one shared package
+  across every template, and called a nonexistent `regex.find_all_stringify`.
+  They now render as valid Rego v1, one package per template, unioned by a
+  generated entrypoint, and are evaluated against a real OPA binary in CI.
+- `AGENTJAIL_SOCKET` is now honored. The documentation described it, but
+  `resolveSocketPath` did not read it.
+
 ## [0.1.0] - 2026-11-12
 
 The first release. It implements all four phases of the design white paper.
@@ -37,9 +62,10 @@ The first release. It implements all four phases of the design white paper.
   time. Sensitive values are redacted before they reach any sink.
 - **Bundle packaging.** A `dsh.bundle` manifest and a `cordis.patch.yml` layer,
   so the plugin installs with `dsh plugin add` and is configured by row id.
-- **Documentation.** `README.md`, `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`,
-  `docs/POLICY.md`, `docs/OPERATIONS.md`, `docs/THREAT-MODEL.md`, and
-  `SECURITY.md`, plus runnable examples under `examples/`.
+- **Documentation.** `README.md`, `README.zh-CN.md`,
+  `docs/ARCHITECTURE.md`, `docs/CONFIGURATION.md`, `docs/POLICY.md`,
+  `docs/OPERATIONS.md`, `docs/THREAT-MODEL.md`, `SECURITY.md`, and
+  `CONTRIBUTING.md`, plus runnable examples under `examples/`.
 
 ### Security
 
