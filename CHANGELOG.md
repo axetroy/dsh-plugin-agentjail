@@ -14,6 +14,20 @@ changes are always called out under `### Changed` or `### Removed`.
 - A Simplified Chinese README (`README.zh-CN.md`), with language links in both
   directions. A test asserts the two stay structurally in sync, so a translated
   section cannot silently fall behind the English one.
+- A read-only security dashboard, served by the Harness web server when one is
+  composed. `/agentjail` renders HTML to a browser and fixed-width text to
+  anything else; `/agentjail/api/{summary,decisions,health}` serve JSON. It
+  cannot widen a policy, clear a denial, or change the failure posture. See
+  `docs/UI.md`.
+- Daemon supervision. When no daemon answers, the plugin starts one from the
+  first usable `agentjail` binary and stops it on unload. A daemon it did not
+  start is adopted and never signalled, so an operator-managed daemon keeps its
+  lifecycle. See `docs/INSTALL.md`.
+- An opt-in managed download (`daemon.managedInstall`), off by default, that
+  fetches the platform release archive and verifies its published SHA-256 before
+  extracting anything. A missing manifest entry, a digest mismatch, or an
+  oversized body installs nothing.
+- `AGENTJAIL_BIN`, read when `daemon.binary` is empty.
 
 ### Changed
 

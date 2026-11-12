@@ -252,9 +252,91 @@ Default `true`. Whether the security report includes a digest of the effective
 enforcement settings, so a report can be tied to the configuration that produced
 it.
 
+## Daemon supervision
+
+These fields control how the plugin gets a daemon to talk to. The full behavior
+is in [`INSTALL.md`](./INSTALL.md).
+
+### `daemon.supervise`
+
+Default `true`. When no daemon answers, the plugin starts one from the first
+usable binary. A daemon that is already answering is adopted and never signalled.
+
+Set `false` when another actor owns the daemon's lifecycle. The plugin still uses
+a running daemon; it just starts and stops nothing.
+
+### `daemon.binary`
+
+Default `''`. Empty resolves `$AGENTJAIL_BIN`, then `agentjail` on `PATH`, then
+the managed directory. A configured path is authoritative: if it is not an
+executable regular file, the plugin reports it and does not fall back.
+
+### `daemon.args`
+
+Default `['daemon']`. The argument vector used to start the daemon.
+
+### `daemon.startTimeoutMs`, `daemon.pollIntervalMs`
+
+Defaults `10000` and `250`. How long to wait for a started daemon to answer, and
+how often to probe while waiting. A daemon that misses the deadline leaves the
+plugin on its `failureAction`.
+
+### `daemon.managedInstall`
+
+Default `false`. When true and no binary is resolvable, the plugin downloads the
+platform release archive, verifies its published SHA-256, and installs it under
+`daemon.managedDir`.
+
+This is the one field that turns the plugin into a network client at load. It is
+off by default because fetching and running a release binary is your trust
+decision. [`INSTALL.md`](./INSTALL.md) documents what the check covers and what
+it does not.
+
+### `daemon.managedVersion`, `daemon.releaseBaseUrl`
+
+Default `''` and the upstream release URL. Empty `managedVersion` reads the
+latest release from the download redirect.
+
+### `daemon.managedDir`
+
+Default `''`, which resolves `$HOME/.agentjail/dsh-plugin-agentjail/bin`. Where a
+downloaded binary is installed.
+
+### `daemon.downloadTimeoutMs`, `daemon.maxArchiveBytes`
+
+Defaults `120000` and `67108864` (64 MiB). The download budget and the largest
+archive the plugin will accept. A larger body is refused before it is hashed.
+
+## Dashboard
+
+These fields control the HTTP surface. The routes, the response shapes, and the
+read-only guarantee are in [`UI.md`](./UI.md).
+
+### `ui.enabled`
+
+Default `true`. Registers the dashboard routes when a Harness web server is
+composed. With no web server — the CLI, the desktop app — nothing is registered
+and this field has no effect.
+
+### `ui.basePath`
+
+Default `/agentjail`. The path the dashboard and its JSON endpoints are served
+from.
+
+### `ui.refreshMs`
+
+Default `5000`. The browser page's self-refresh interval. `0` disables it; the
+JSON endpoints are unaffected either way.
+
+### `ui.recordLimit`
+
+Default `200`. How many audit records the page and the summary endpoint carry.
+`/agentjail/api/decisions` accepts a higher `limit` up to 1000.
+
 ## Environment variables
 
-| Variable                   | Effect                                           |
-| -------------------------- | ------------------------------------------------ |
-| `AGENTJAIL_SOCKET`         | Daemon socket path, when `socketPath` is empty.  |
-| `AGENTJAIL_DSH_AUDIT_PATH` | Audit file path, when `audit.filePath` is empty. |
+| Variable                   | Effect                                             |
+| -------------------------- | -------------------------------------------------- |
+| `AGENTJAIL_SOCKET`         | Daemon socket path, when `socketPath` is empty.    |
+| `AGENTJAIL_DSH_AUDIT_PATH` | Audit file path, when `audit.filePath` is empty.   |
+| `AGENTJAIL_BIN`            | Daemon binary path, when `daemon.binary` is empty. |

@@ -65,6 +65,38 @@ describe('localized READMEs', () => {
     }
   })
 
+  it('link the new operational documents from both languages', () => {
+    for (const target of ['docs/INSTALL.md', 'docs/UI.md']) {
+      expect(english).toContain(target)
+      expect(chinese).toContain(target)
+    }
+  })
+
+  it('document the dashboard surface in both languages', () => {
+    for (const token of [
+      '/agentjail/api/summary',
+      '/agentjail/api/decisions',
+      '/agentjail/api/health',
+      'daemon.managedInstall',
+      'daemon.supervise',
+    ]) {
+      expect(english).toContain(token)
+      expect(chinese).toContain(token)
+    }
+  })
+
+  it('document the same service accessors in both languages', () => {
+    for (const token of [
+      'ctx.agentjail.dashboard()',
+      'ctx.agentjail.dashboardText()',
+      'ctx.agentjail.supervision()',
+      'ctx.agentjail.ensureDaemon()',
+    ]) {
+      expect(english).toContain(token)
+      expect(chinese).toContain(token)
+    }
+  })
+
   it('does not claim a Node floor below the one package.json declares', () => {
     const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
       engines: Record<string, string>

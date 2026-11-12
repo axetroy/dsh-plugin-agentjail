@@ -89,11 +89,26 @@ user --trusts--> policy author --writes--> Rego --evaluated by--> OPA
                      +--trusts--> the plugin's enforcement
 
 agent --untrusted--> tool call --> plugin --> verdict
+
+reader --untrusted--> dashboard route --> already-redacted state
+plugin --trusts--> agentjail binary --> started as a child process
 ```
 
 The agent is untrusted. The policy is trusted: it is the thing that decides. The
 plugin is trusted to enforce the policy faithfully, which is why the enforcement
 path has its own tests and a review requirement.
+
+Two boundaries were added after the first release, and neither is on the
+enforcement path:
+
+- **The dashboard** reads state the enforcement path already produced. It has no
+  write path, so a reader who reaches it can learn what happened but cannot change
+  what will happen. It is still a reader of session ids, tool names, and redacted
+  arguments, so bind the web server to loopback and treat the port as sensitive.
+- **The supervised daemon** is a child process the plugin starts from a binary it
+  located. The binary is trusted to be AgentJail. A `PATH` entry an attacker can
+  write is a way to substitute it, which is why `daemon.binary` is authoritative
+  and why the managed download verifies a digest before installing anything.
 
 ## Defense in depth
 
@@ -110,6 +125,13 @@ The plugin is one layer. The design white paper names the others:
 Deploy the sandbox and the tunnel alongside this plugin. A deployment that relies
 on interception alone has a control plane and no data plane.
 
+The managed download (`daemon.managedInstall`) is a supply-chain decision rather
+than a defense layer. It verifies the release's published SHA-256, which catches a
+corrupted or truncated archive and a manifest that does not list the asset. It
+does not verify the release's `minisign` signature, so it does not defend against
+a compromise of the release host. A deployment that treats that as in scope
+should install AgentJail out of band and pin `daemon.binary`.
+
 ## Configuration mistakes that defeat the model
 
 In rough order of severity:
@@ -124,6 +146,10 @@ In rough order of severity:
    trial.
 5. `enforcement: monitor` left on - nothing is enforced at all.
 6. A permissive `override` that outranks the engine for a broad scope.
+7. `daemon.binary` left empty on a machine where an untrusted directory precedes
+   the real `agentjail` on `PATH` - the plugin starts whatever it finds first.
+8. The web server bound to a non-loopback address - the dashboard is
+   unauthenticated by construction and readable by anyone who reaches the port.
 
 Each of these is a legitimate setting in a specific situation. None is a
 legitimate default.

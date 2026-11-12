@@ -8,6 +8,7 @@
  */
 
 import Schema from '@deepseek-ai/schemastery'
+import { DEFAULT_RELEASE_BASE_URL } from '../adapter/installer.js'
 
 /** Verdict the plugin applies when the policy engine cannot return a trusted answer. */
 export type FailureAction = 'deny' | 'ask' | 'allow'
@@ -30,6 +31,53 @@ export interface ScopeOverride {
 export interface PolicyContextConfig {
   /** Extra static key/value attributes attached to every policy request. */
   attributes: Record<string, string>
+}
+
+/** Daemon supervision and managed-install settings. */
+export interface DaemonConfig {
+  /**
+   * Start an AgentJail daemon when none is answering.
+   *
+   * A daemon that is already running — started by systemd, launchd, or the
+   * official installer — is never touched. This only fills the gap where a
+   * machine has AgentJail installed but nothing has started it yet.
+   */
+  supervise: boolean
+  /** Explicit `agentjail` binary path. Empty falls back to `AGENTJAIL_BIN`, then `PATH`. */
+  binary: string
+  /** Arguments used to start the daemon. */
+  args: string[]
+  /** How long to wait for a started daemon to answer, in milliseconds. */
+  startTimeoutMs: number
+  /** Delay between readiness probes while waiting for a started daemon. */
+  pollIntervalMs: number
+  /**
+   * Download and install an AgentJail binary when none is found. Off by default:
+   * fetching and executing a release binary is the operator's trust decision.
+   */
+  managedInstall: boolean
+  /** Release tag to install, e.g. `v1.8.2`. Empty uses the latest release. */
+  managedVersion: string
+  /** Base URL serving `<base>/<tag>/<asset>`. */
+  releaseBaseUrl: string
+  /** Directory a managed binary is installed into. Empty uses the per-user default. */
+  managedDir: string
+  /** Download budget in milliseconds. */
+  downloadTimeoutMs: number
+  /** Maximum accepted archive size in bytes. */
+  maxArchiveBytes: number
+}
+
+/** Dashboard settings. */
+export interface UiConfig {
+  /** Serve the dashboard when a Harness web server is composed. */
+  enabled: boolean
+  /** Base path the dashboard is served from. */
+  basePath: string
+  /** Browser page refresh interval in milliseconds; `0` disables it. */
+  refreshMs: number
+  /** Maximum audit records the JSON endpoint returns. */
+  recordLimit: number
 }
 
 /** Plugin configuration. */
@@ -130,6 +178,10 @@ export interface Config {
   }
   /** Extra attributes attached to every policy evaluation request. */
   policyContext: PolicyContextConfig
+  /** Daemon supervision and managed-install settings. */
+  daemon: DaemonConfig
+  /** Dashboard settings. */
+  ui: UiConfig
 }
 
 const scopeOverride = Schema.object({
@@ -260,5 +312,62 @@ export const Config: Schema<Config> = Schema.object({
   }).default({}),
   policyContext: Schema.object({
     attributes: Schema.dict(Schema.string()).default({}),
+  }).default({}),
+  daemon: Schema.object({
+    supervise: Schema.boolean()
+      .default(true)
+      .description('Start an AgentJail daemon when none is answering.'),
+    binary: Schema.string()
+      .default('')
+      .description('Explicit agentjail binary path; empty falls back to AGENTJAIL_BIN then PATH.'),
+    args: Schema.array(Schema.string())
+      .default(['daemon'])
+      .description('Arguments used to start the daemon.'),
+    startTimeoutMs: Schema.number()
+      .default(10000)
+      .min(100)
+      .description('How long to wait for a started daemon to answer.'),
+    pollIntervalMs: Schema.number()
+      .default(250)
+      .min(10)
+      .description('Delay between readiness probes while waiting for a started daemon.'),
+    managedInstall: Schema.boolean()
+      .default(false)
+      .description('Download and install an AgentJail binary when none is found.'),
+    managedVersion: Schema.string()
+      .default('')
+      .description('Release tag to install; empty uses the latest release.'),
+    releaseBaseUrl: Schema.string()
+      .default(DEFAULT_RELEASE_BASE_URL)
+      .description('Base URL serving release assets.'),
+    managedDir: Schema.string()
+      .default('')
+      .description(
+        'Directory a managed binary is installed into; empty uses the per-user default.',
+      ),
+    downloadTimeoutMs: Schema.number()
+      .default(120000)
+      .min(1000)
+      .description('Download budget in milliseconds.'),
+    maxArchiveBytes: Schema.number()
+      .default(67108864)
+      .min(1048576)
+      .description('Maximum accepted archive size in bytes.'),
+  }).default({}),
+  ui: Schema.object({
+    enabled: Schema.boolean()
+      .default(true)
+      .description('Serve the dashboard when a Harness web server is composed.'),
+    basePath: Schema.string()
+      .default('/agentjail')
+      .description('Base path the dashboard is served from.'),
+    refreshMs: Schema.number()
+      .default(5000)
+      .min(0)
+      .description('Browser page refresh interval; 0 disables it.'),
+    recordLimit: Schema.number()
+      .default(200)
+      .min(1)
+      .description('Maximum audit records the JSON endpoint returns.'),
   }).default({}),
 })

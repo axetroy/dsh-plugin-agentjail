@@ -73,3 +73,30 @@
           denyRateAlertMinSamples: 20
           statsWindowMs: 300000
           includePolicyDigest: true
+
+        # Daemon supervision. A daemon that is already answering is adopted and
+        # never signalled; one this plugin starts is stopped when it unloads.
+        daemon:
+          supervise: true
+          # Empty resolves $AGENTJAIL_BIN, then `agentjail` on PATH, then the
+          # managed directory below.
+          binary: ''
+          args: ['daemon']
+          startTimeoutMs: 10000
+          pollIntervalMs: 250
+          # Downloading a release binary is an explicit trust decision, so it is
+          # off by default. See docs/INSTALL.md before enabling it.
+          managedInstall: false
+          managedVersion: ''
+          managedDir: ''
+          downloadTimeoutMs: 120000
+          maxArchiveBytes: 67108864
+
+        # The dashboard is read-only and is served only when a Harness web server
+        # is composed. It cannot widen a policy, clear a denial, or change the
+        # failure posture.
+        ui:
+          enabled: true
+          basePath: /agentjail
+          refreshMs: 5000
+          recordLimit: 200

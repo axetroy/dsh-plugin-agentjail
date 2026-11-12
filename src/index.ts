@@ -39,6 +39,15 @@ import { createPostToolUseObserver, type PostToolUseObserver } from './hooks/pos
 import { createApprovalHook, type ApprovalHook } from './hooks/approval.js'
 import { resolveTemplates, writeTemplateBundle } from './security/policy.js'
 import type { DecisionAlert } from './security/decision.js'
+import {
+  DaemonSupervisor,
+  defaultManagedDir,
+  resolveDaemonBinary,
+  type SupervisionState,
+} from './adapter/supervisor.js'
+import { installManagedBinary } from './adapter/installer.js'
+import { registerDashboardRoutes, type WebServerLike } from './ui/routes.js'
+import { renderDashboardText, type DashboardData } from './ui/dashboard.js'
 
 export const name = 'agentjail'
 export const inject = ['tools']
@@ -119,6 +128,26 @@ export interface AgentJailService {
   invalidateCache(): void
   /** Alerts observed since plugin load, newest last. */
   alerts(): DecisionAlert[]
+  /** What the plugin is currently relying on for policy. */
+  supervision(): SupervisionState
+  /**
+   * Ensure a policy daemon is answering, starting one when none is.
+   *
+   * A daemon this process did not start is never touched, and the started one
+   * is stopped only when it was started here.
+   * @returns the supervision outcome after the pass.
+   */
+  ensureDaemon(): Promise<{ state: SupervisionState; managed: boolean; reason?: string }>
+  /**
+   * Assemble the dashboard payload.
+   * @returns the data the dashboard renders.
+   */
+  dashboard(): DashboardData
+  /**
+   * Render the dashboard as plain text.
+   * @returns the fixed-width summary.
+   */
+  dashboardText(): string
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -197,6 +226,18 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     denyRateAlertMinSamples: config.governance.denyRateAlertMinSamples,
   })
 
+  const managedDir =
+    config.daemon.managedDir.length > 0 ? config.daemon.managedDir : defaultManagedDir()
+  const supervisor = new DaemonSupervisor({
+    enabled: config.daemon.supervise,
+    binary: config.daemon.binary,
+    socketPath: client.socketPath,
+    managedDir,
+    args: config.daemon.args,
+    startTimeoutMs: config.daemon.startTimeoutMs,
+    pollIntervalMs: config.daemon.pollIntervalMs,
+  })
+
   const gate = createPreToolUseGate(ctx, {
     config,
     client,
@@ -234,6 +275,59 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
   } else {
     logger?.info?.('agentjail: no approval service is composed; "ask" verdicts resolve to a denial')
   }
+
+  /** Probe the daemon liveness with a bounded budget. */
+  const probeDaemon = async (): Promise<boolean> => {
+    const snapshot = await client.probe()
+    return snapshot.state === 'healthy'
+  }
+
+  /**
+   * Download a managed binary when configured and none is installed.
+   *
+   * This runs only when `daemon.managedInstall` is set, and it is skipped
+   * entirely when an `agentjail` binary is already resolvable, so an existing
+   * install is never replaced by a download.
+   */
+  const installManagedBinaryIfConfigured = async (): Promise<void> => {
+    if (!config.daemon.managedInstall) return
+    const existing = resolveDaemonBinary({ binary: config.daemon.binary, managedDir })
+    if (existing !== undefined && existing.source !== 'managed') {
+      logger?.info?.('agentjail: using the existing agentjail binary at %s', existing.path)
+      return
+    }
+    if (existing?.source === 'managed') return
+    logger?.info?.('agentjail: downloading a managed AgentJail binary into %s', managedDir)
+    const result = await installManagedBinary({
+      version: config.daemon.managedVersion,
+      releaseBaseUrl: config.daemon.releaseBaseUrl,
+      managedDir,
+      timeoutMs: config.daemon.downloadTimeoutMs,
+      maxArchiveBytes: config.daemon.maxArchiveBytes,
+    })
+    if (result.installed) {
+      logger?.info?.('agentjail: installed managed binary %s', result.path ?? managedDir)
+    } else {
+      logger?.warn?.(
+        'agentjail: managed install did not complete (%s); continuing without it',
+        result.reason ?? 'unknown reason',
+      )
+    }
+  }
+
+  /** Assemble the dashboard payload from the live plugin state. */
+  const collectDashboard = (): DashboardData => ({
+    health: client.snapshot(),
+    stats: metrics.snapshot(),
+    records: audit.query({ limit: config.ui.recordLimit }),
+    grants: grants.list(),
+    alerts: [...alerts],
+    supervision: supervisor.current,
+    enforcement: config.enforcement,
+    failureAction: config.failureAction,
+    defaultAction: config.defaultAction,
+    now: new Date().toISOString(),
+  })
 
   const service: AgentJailService = {
     gate,
@@ -290,6 +384,29 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     },
     invalidateCache: () => client.invalidate(),
     alerts: () => [...alerts],
+    supervision: () => supervisor.current,
+    ensureDaemon: async () => {
+      await installManagedBinaryIfConfigured()
+      const outcome = await supervisor.ensure(() => probeDaemon())
+      if (outcome.state === 'started') {
+        logger?.info?.('agentjail: started a policy daemon via %s', outcome.binary?.path ?? '?')
+      } else if (outcome.state === 'external') {
+        logger?.info?.('agentjail: using the daemon already running at %s', client.socketPath)
+      } else if (outcome.reason !== undefined) {
+        logger?.warn?.(
+          'agentjail: no policy daemon available (%s); applying the configured failure action "%s"',
+          outcome.reason,
+          config.failureAction,
+        )
+      }
+      return {
+        state: outcome.state,
+        managed: outcome.managed,
+        ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+      }
+    },
+    dashboard: () => collectDashboard(),
+    dashboardText: () => renderDashboardText(collectDashboard()),
   }
   ctx.provide('agentjail', service)
 
@@ -306,6 +423,32 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
           error instanceof Error ? error.message : String(error),
         ),
     )
+  }
+
+  // The dashboard is registered only when a web server is composed. A headless
+  // deployment, the CLI, and the desktop app have none, and that is not an
+  // error: the enforcement path does not depend on any of this.
+  if (config.ui.enabled) {
+    const webServer = ctx.get('webServer') as WebServerLike | undefined
+    if (webServer === undefined) {
+      logger?.info?.('agentjail: no web server is composed; the security dashboard is not served')
+    } else {
+      const disposeRoutes = registerDashboardRoutes(webServer, {
+        basePath: config.ui.basePath,
+        collect: () => collectDashboard(),
+        refreshMs: config.ui.refreshMs,
+        recordLimit: config.ui.recordLimit,
+      })
+      ctx.effect(() => disposeRoutes)
+      logger?.info?.('agentjail: security dashboard served at %s', config.ui.basePath)
+    }
+  }
+
+  // Fill the gap where AgentJail is installed but nothing has started its
+  // daemon. A daemon that is already answering is left alone, and only a daemon
+  // this process started is stopped on unload.
+  if (config.daemon.supervise) {
+    void service.ensureDaemon()
   }
 
   if (config.healthCheckOnLoad) {
@@ -339,7 +482,12 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     ctx.effect(() => () => clearInterval(timer))
   }
 
-  ctx.effect(() => () => client.close())
+  ctx.effect(() => () => {
+    // Only a daemon this process started is signalled; an operator-managed one
+    // keeps running so another session keeps its protection.
+    supervisor.stop()
+    client.close()
+  })
 
   logger?.info?.(
     'agentjail: mounted in %s mode; socket=%s failure=%s default=%s',

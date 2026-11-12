@@ -51,6 +51,9 @@ a security regression, not a style disagreement.
 | `src/hooks/`                    | `tools/pre-execute` gate, post-execute observer, approval answerer      |
 | `src/security/`                 | decision resolution, normalization, grants, policy templates, redaction |
 | `src/adapter/`                  | socket connection, protocol frames, caching client                      |
+| `src/adapter/supervisor.ts`     | locate and start a daemon; never adopts or stops a foreign one          |
+| `src/adapter/installer.ts`      | opt-in managed download with SHA-256 verification                       |
+| `src/ui/`                       | read-only dashboard rendering and its HTTP routes                       |
 | `src/audit/`, `src/governance/` | audit trail, metrics, reports                                           |
 | `src/config/schema.ts`          | Schemastery config; `Config` interface + schema export                  |
 | `policy/`                       | Generated Rego bundle (see below)                                       |
@@ -97,6 +100,13 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}' \
 - Adapter tests use a real Unix socket served by `tests/helpers/fake-daemon.ts`.
   The fake daemon has a separate `control()` reply for health pings.
 - Do not mock what you can instantiate.
+- The dashboard is tested over a real `node:http` server and a real `fetch`, and
+  the managed installer is tested against a real local HTTP server serving a real
+  `tar.gz`. Both paths fail closed, so the negative cases (digest mismatch,
+  missing manifest entry, no binary found) carry the weight.
+- `tests/integration/ui-and-supervision.test.ts` covers the dashboard routes and
+  daemon supervision end to end. Its supervision cases spawn a stand-in shell
+  script, so assert that no child outlives the test.
 
 ## Documentation is bilingual
 
@@ -107,7 +117,10 @@ order, and the same install commands, API surface, default verdicts, and Node
 floor. When you change one, change the other in the same commit.
 
 `DESIGN.md` is the Chinese white paper and is the source of record for the
-design; `docs/` is English only.
+design; `docs/` is English only. `docs/INSTALL.md` (daemon supervision and the
+managed download) and `docs/UI.md` (the dashboard and the `agentjail` service)
+are the two operational documents a change to `src/ui/` or `src/adapter/` should
+keep current.
 
 ## Formatting
 

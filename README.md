@@ -53,12 +53,36 @@ The plugin is a DeepSeek Harness bundle: an npm package that ships a Cordis
 configuration layer.
 
 ```sh
-# 1. Run the AgentJail daemon. See its repository for the current command.
-agentjail daemon
-
-# 2. Install the plugin into a profile. The first use creates the profile with
+# 1. Install the plugin into a profile. The first use creates the profile with
 #    @deepseek-ai/dsh-base as its first bundle.
 dsh plugin --profile secure add dsh-plugin-agentjail
+
+# 2. If agentjail is on your PATH, the plugin starts the daemon for you.
+dsh --profile secure
+```
+
+### Do I need to install AgentJail separately?
+
+Only once, and only the binary. The plugin supervises the daemon, so there is no
+separate "start the daemon" step:
+
+- **A daemon is already running.** The plugin uses it and touches nothing. A
+  daemon you started through systemd, launchd, or `agentjail install` keeps its
+  own lifecycle. Set `daemon.supervise: false` to opt out of supervision
+  entirely.
+- **`agentjail` is on your PATH but nothing is running.** The plugin starts
+  `agentjail daemon` and stops it again when the plugin unloads.
+- **Nothing is installed.** Point `daemon.binary` at a binary, or set
+  `daemon.managedInstall: true` and the plugin downloads a release binary into
+  `~/.agentjail/dsh-plugin-agentjail/bin` on first load. The download verifies
+  the release's published SHA-256 before extracting anything.
+
+`docs/INSTALL.md` covers each case, the search order, and the residual trust
+question in the managed download.
+
+```sh
+# Install the daemon yourself, once, if you prefer to own it.
+curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
 The install appends this package to the profile's `dsh.profile.bundles` list
@@ -90,7 +114,7 @@ tools.
 
 - Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
-- A reachable AgentJail daemon
+- An AgentJail binary (on `PATH`, configured, or downloaded by the plugin)
 
 ## Configure
 
@@ -120,6 +144,13 @@ keep.
           storage: file # file | memory | none
           filePath: '' # '' → $AGENTJAIL_DSH_AUDIT_PATH → ~/.agentjail/dsh-audit.jsonl
           redactSensitiveData: true
+        daemon:
+          supervise: true # start a daemon when none is answering
+          binary: '' # '' → $AGENTJAIL_BIN → PATH → managed download
+          managedInstall: false # download a release binary when none is found
+        ui:
+          enabled: true # serve the dashboard when a web server is composed
+          basePath: /agentjail
 ```
 
 `docs/CONFIGURATION.md` documents every field, its default, and what changing it
@@ -134,10 +165,11 @@ costs. The short version:
 
 ### Environment variables
 
-| Variable                   | Effect                                                |
-| -------------------------- | ----------------------------------------------------- |
-| `AGENTJAIL_SOCKET`         | Daemon socket path, used when `socketPath` is empty.  |
-| `AGENTJAIL_DSH_AUDIT_PATH` | Audit file path, used when `audit.filePath` is empty. |
+| Variable                   | Effect                                                  |
+| -------------------------- | ------------------------------------------------------- |
+| `AGENTJAIL_SOCKET`         | Daemon socket path, used when `socketPath` is empty.    |
+| `AGENTJAIL_DSH_AUDIT_PATH` | Audit file path, used when `audit.filePath` is empty.   |
+| `AGENTJAIL_BIN`            | Daemon binary path, used when `daemon.binary` is empty. |
 
 ## Policies
 
@@ -214,10 +246,59 @@ ctx.agentjail.listGrants() // outstanding approvals
 ctx.agentjail.revokeSession(sessionId) // drop a session's approvals
 ctx.agentjail.writePolicyTemplates() // render configured templates to disk
 ctx.agentjail.invalidateCache() // after a policy reload
+ctx.agentjail.dashboard() // the dashboard payload, as JSON-ready data
+ctx.agentjail.dashboardText() // the dashboard as fixed-width text
+ctx.agentjail.supervision() // 'external' | 'started' | 'exited' | 'unavailable' | 'disabled'
+ctx.agentjail.ensureDaemon() // start a daemon if none is answering
 ```
 
 `docs/OPERATIONS.md` covers rotation, retention, alerting, and incident
 response.
+
+## Dashboard
+
+Every decision the plugin makes is already recorded. The dashboard renders that
+record while the agent runs, so an operator can watch a session instead of
+reading the audit file afterwards.
+
+It is served by the Harness web server when one is composed — `dsh web`, the
+default port 3080 — at `http://127.0.0.1:3080/agentjail`. Nothing is registered
+when no web server is present, so the CLI and the desktop app are unaffected.
+
+```
+$ curl localhost:3080/agentjail
+AgentJail security dashboard
+generated   2026-11-12T10:31:07.512Z
+enforcement enforce  failure deny  default deny
+engine      healthy  (/home/you/.agentjail/daemon.sock)
+supervision external
+
+decisions   18  allow 15  deny 2  ask 1
+deny rate   11.1%
+approvals   1
+
+recent decisions:
+       7  2026-11-12T10:31:05.100Z  deny   bash  no-remote-execution
+```
+
+A browser gets the same data as a page: summary tiles, a decisions table, the
+outstanding approvals, and the alerts raised since load. The page is one
+self-contained document with no external requests and no framework, and it
+refreshes itself on the configured interval.
+
+Three JSON endpoints sit alongside it for scripts:
+
+| Endpoint                   | Returns                                               |
+| -------------------------- | ----------------------------------------------------- |
+| `/agentjail/api/summary`   | Counts, health, supervision, approvals, recent rows.  |
+| `/agentjail/api/decisions` | Audit records; filter with `?verdict=` and `?limit=`. |
+| `/agentjail/api/health`    | Engine state, socket, supervision, failure posture.   |
+
+The dashboard is read-only by construction. It cannot widen a policy, clear a
+denial, or change the failure posture, because a reporting surface that could do
+those things would be a larger attack surface than the gate it reports on. The
+same data is available in-process through the `agentjail` service, and
+`docs/UI.md` documents both.
 
 ## What this does not do
 

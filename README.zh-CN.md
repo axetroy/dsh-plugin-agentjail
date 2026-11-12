@@ -49,12 +49,34 @@ agent → 工具调用 → tools/pre-execute → DH-AgentJail → AgentJail daem
 本插件是一个 DeepSeek Harness bundle：一个携带 Cordis 配置层的 npm 包。
 
 ```sh
-# 1. 启动 AgentJail 守护进程。具体命令见其仓库。
-agentjail daemon
-
-# 2. 安装到某个 profile。首次使用会创建该 profile，并以
+# 1. 安装到某个 profile。首次使用会创建该 profile，并以
 #    @deepseek-ai/dsh-base 作为第一个 bundle。
 dsh plugin --profile secure add dsh-plugin-agentjail
+
+# 2. 如果 agentjail 在 PATH 中，插件会自动帮你启动守护进程。
+dsh --profile secure
+```
+
+### 需要单独安装 AgentJail 吗？
+
+只需要装一次，而且只需要那个二进制文件。守护进程由插件托管，因此没有单独的「启动守护
+进程」这一步：
+
+- **已经有守护进程在运行。** 插件直接使用它，不做任何改动。你通过 systemd、launchd 或
+  `agentjail install` 启动的守护进程保持自己的生命周期。设置
+  `daemon.supervise: false` 可以完全关闭托管。
+- **`agentjail` 在 PATH 中，但没有在运行。** 插件会启动 `agentjail daemon`，并在插件
+  卸载时把它停掉。
+- **什么都没装。** 用 `daemon.binary` 指向一个二进制文件，或设置
+  `daemon.managedInstall: true`，插件会在首次加载时把发行版二进制下载到
+  `~/.agentjail/dsh-plugin-agentjail/bin`。下载会先校验发行版公布的 SHA-256 再解压。
+
+[`docs/INSTALL.md`](./docs/INSTALL.md) 说明了每种情况、查找顺序，以及托管下载中残留的
+信任问题。
+
+```sh
+# 如果你想自己管理，也可以一次性自行安装守护进程。
+curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
 由于本包声明了 `dsh.bundle`，安装会把这个包追加到 profile 的
@@ -82,7 +104,7 @@ dsh plugin --profile secure add github:axetroy/dsh-plugin-agentjail#v0.1.0
 
 - Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
-- 一个可访问的 AgentJail 守护进程
+- 一个 AgentJail 二进制文件（在 `PATH` 中、显式配置，或由插件下载）
 
 ## 配置
 
@@ -111,6 +133,13 @@ dsh plugin --profile secure add github:axetroy/dsh-plugin-agentjail#v0.1.0
           storage: file # file | memory | none
           filePath: '' # '' → $AGENTJAIL_DSH_AUDIT_PATH → ~/.agentjail/dsh-audit.jsonl
           redactSensitiveData: true
+        daemon:
+          supervise: true # 没有守护进程时自动启动一个
+          binary: '' # '' → $AGENTJAIL_BIN → PATH → 托管下载
+          managedInstall: false # 找不到二进制时是否下载发行版
+        ui:
+          enabled: true # 存在 web server 时提供仪表盘
+          basePath: /agentjail
 ```
 
 [`docs/CONFIGURATION.md`](./docs/CONFIGURATION.md) 记录了每个字段、其默认值，以及
@@ -124,10 +153,11 @@ dsh plugin --profile secure add github:axetroy/dsh-plugin-agentjail#v0.1.0
 
 ### 环境变量
 
-| 变量                       | 作用                                             |
-| -------------------------- | ------------------------------------------------ |
-| `AGENTJAIL_SOCKET`         | 守护进程套接字路径，在 `socketPath` 为空时生效。 |
-| `AGENTJAIL_DSH_AUDIT_PATH` | 审计文件路径，在 `audit.filePath` 为空时生效。   |
+| 变量                       | 作用                                                |
+| -------------------------- | --------------------------------------------------- |
+| `AGENTJAIL_SOCKET`         | 守护进程套接字路径，在 `socketPath` 为空时生效。    |
+| `AGENTJAIL_DSH_AUDIT_PATH` | 审计文件路径，在 `audit.filePath` 为空时生效。      |
+| `AGENTJAIL_BIN`            | 守护进程二进制路径，在 `daemon.binary` 为空时生效。 |
 
 ## 策略
 
@@ -202,9 +232,53 @@ ctx.agentjail.listGrants() // 尚未过期的授权
 ctx.agentjail.revokeSession(sessionId) // 撤销某会话的全部授权
 ctx.agentjail.writePolicyTemplates() // 把已配置的模板渲染到磁盘
 ctx.agentjail.invalidateCache() // 策略重载之后调用
+ctx.agentjail.dashboard() // 仪表盘数据，可直接序列化为 JSON
+ctx.agentjail.dashboardText() // 仪表盘的等宽文本形式
+ctx.agentjail.supervision() // 'external' | 'started' | 'exited' | 'unavailable' | 'disabled'
+ctx.agentjail.ensureDaemon() // 没有守护进程在应答时启动一个
 ```
 
 日志轮转、保留、告警与事件响应见 [`docs/OPERATIONS.md`](./docs/OPERATIONS.md)。
+
+## 仪表盘
+
+插件做出的每一个判定都已被记录。仪表盘把这份记录在 Agent 运行期间渲染出来，运维人员
+可以直接观察一次会话，而不必事后去读审计文件。
+
+当组合中存在 Harness web server 时（`dsh web`，默认端口 3080），它会在
+`http://127.0.0.1:3080/agentjail` 提供页面。没有 web server 时不会注册任何路由，因此
+CLI 和桌面端不受影响。
+
+```
+$ curl localhost:3080/agentjail
+AgentJail security dashboard
+generated   2026-11-12T10:31:07.512Z
+enforcement enforce  failure deny  default deny
+engine      healthy  (/home/you/.agentjail/daemon.sock)
+supervision external
+
+decisions   18  allow 15  deny 2  ask 1
+deny rate   11.1%
+approvals   1
+
+recent decisions:
+       7  2026-11-12T10:31:05.100Z  deny   bash  no-remote-execution
+```
+
+浏览器拿到的是同一份数据的页面版本：概览磁贴、判定表格、未过期的审批，以及加载以来
+产生的告警。页面是一个自包含文档，没有外部请求、没有框架，并会按配置的间隔自动刷新。
+
+旁边还有三个 JSON 接口供脚本使用：
+
+| 接口                       | 返回内容                                       |
+| -------------------------- | ---------------------------------------------- |
+| `/agentjail/api/summary`   | 计数、健康状态、托管状态、审批、最近的记录。   |
+| `/agentjail/api/decisions` | 审计记录；可用 `?verdict=` 和 `?limit=` 过滤。 |
+| `/agentjail/api/health`    | 引擎状态、套接字、托管状态、失败姿态。         |
+
+仪表盘在设计上就是只读的。它无法放宽策略、无法清除某次拒绝、也无法改变失败姿态——因为
+一个能做到这些的展示面，会比它所报告的关卡本身更大的攻击面。同样的数据也可以通过
+`agentjail` 服务在进程内读取，[`docs/UI.md`](./docs/UI.md) 同时记录了两者。
 
 ## 它做不到什么
 
