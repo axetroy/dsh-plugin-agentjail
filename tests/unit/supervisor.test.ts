@@ -27,6 +27,15 @@ async function fakeBinary(directory: string, name = DAEMON_BINARY_NAME): Promise
   return path
 }
 
+/** A stand-in binary that stays alive, so a spawned child is still running. */
+async function sleepingBinary(directory: string, name = DAEMON_BINARY_NAME): Promise<string> {
+  await mkdir(directory, { recursive: true })
+  const path = join(directory, name)
+  await writeFile(path, '#!/bin/sh\nsleep 60\n')
+  await chmod(path, 0o755)
+  return path
+}
+
 function options(overrides: Partial<SupervisorOptions> = {}): SupervisorOptions {
   return {
     enabled: true,
@@ -428,6 +437,46 @@ describe('restart', () => {
     const supervisor = new DaemonSupervisor(options())
     await supervisor.ensure(async () => true)
     expect(supervisor.restart()).toBeUndefined()
+  })
+
+  it('reports a stopped managed daemon as no longer answering', async () => {
+    // `stop()` must not leave the supervisor claiming a live managed daemon.
+    const dir = await scratch()
+    await sleepingBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), startTimeoutMs: 2000 }),
+    )
+    let calls = 0
+    await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    })
+    expect(supervisor.current).toBe('started')
+    supervisor.stop()
+    expect(supervisor.current).toBe('exited')
+    expect(supervisor.managed).toBe(false)
+  })
+
+  it('keeps owning the daemon after a restart', async () => {
+    // `restart()` stops the old daemon and starts a new one. Stopping flips the
+    // state to `exited`, so the restart must flip it back: otherwise the
+    // supervisor disowns the daemon it just started, the dashboard reports
+    // `exited` while a daemon is running, and the next policy reload is refused
+    // as if the daemon belonged to someone else.
+    const dir = await scratch()
+    await sleepingBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), startTimeoutMs: 2000 }),
+    )
+    let calls = 0
+    await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    })
+    expect(supervisor.restart()).toBeTypeOf('number')
+    expect(supervisor.current).toBe('started')
+    expect(supervisor.managed).toBe(true)
+    supervisor.stop()
   })
 
   it('refuses to restart when no daemon is running', () => {

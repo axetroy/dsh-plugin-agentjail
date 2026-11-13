@@ -431,6 +431,10 @@ export class DaemonSupervisor {
     if (this.state !== 'started') return undefined
     this.stop()
     this.spawnDaemon()
+    // `stop()` left the state at `exited`; the replacement is ours too, so
+    // reclaim ownership. The exit handler still demotes this to `exited` if the
+    // new child dies, so the state stays truthful either way.
+    if (this.child?.exitCode === null) this.state = 'started'
     return this.child?.pid
   }
 

@@ -254,6 +254,32 @@ describe('vendored build', () => {
     expect(ignore).toMatch(/^vendor\/$/m)
   })
 
+  it('vendors every binary the upstream CLI needs, not just the daemon', () => {
+    // Upstream ships `agentjail-hook` alongside `agentjail`, and the CLI's own
+    // `install` command aborts without it next to the daemon binary. Copying
+    // only `agentjail` produces a package whose CLI cannot install hooks.
+    const script = readFileSync(resolve(root, 'scripts/vendor-agentjail.mjs'), 'utf8')
+    const hook = script.indexOf("'agentjail-hook'")
+    expect(hook).toBeGreaterThan(-1)
+    // Both must be chmod'ed; a copied-but-not-executable hook is still broken.
+    const executables = script.match(/const EXECUTABLE_FILES = \[([^\]]*)\]/)
+    expect(executables?.[1]).toContain("'agentjail'")
+    expect(executables?.[1]).toContain("'agentjail-hook'")
+  })
+
+  it('fails the vendored check when either binary is absent', () => {
+    // `checkTarget` iterates the executable list, so a vendor directory that
+    // lost one binary cannot pass `vendor:check` and reach a release.
+    const script = readFileSync(resolve(root, 'scripts/vendor-agentjail.mjs'), 'utf8')
+    const check = script.slice(script.indexOf('async function checkTarget'))
+    expect(check).toContain('for (const name of EXECUTABLE_FILES)')
+  })
+
+  it('requires both binaries to ship in the packed tarball', () => {
+    const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
+    expect(ci).toContain("for (const name of ['agentjail', 'agentjail-hook'])")
+  })
+
   it('verifies the archive before unpacking it, so a mismatch never runs', () => {
     const script = readFileSync(resolve(root, 'scripts/vendor-agentjail.mjs'), 'utf8')
     // The checksum comparison must precede the extraction call, or a tampered

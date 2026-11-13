@@ -138,6 +138,14 @@ jobs:
             const [entry] = JSON.parse(raw.slice(start))
             const vendored = entry.files.filter((f) => f.path.startsWith('vendor/'))
             if (vendored.length === 0) throw new Error('the package does not include the vendored build')
+            // Both binaries must ship: the CLI refuses to run `install` without
+            // agentjail-hook next to agentjail, and a count-only check would not
+            // notice it going missing.
+            for (const name of ['agentjail', 'agentjail-hook']) {
+              if (!vendored.some((f) => f.path.endsWith('/' + name))) {
+                throw new Error('the package is missing the vendored ' + name)
+              }
+            }
             console.log('package includes', vendored.length, 'vendored files')
           "
 

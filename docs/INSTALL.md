@@ -99,6 +99,59 @@ If the daemon does not answer in time, the plugin reports why and keeps applying
 the configured `failureAction`. Supervision failing is not a reason to allow a
 call.
 
+### Why the plugin starts the daemon rather than asking you to
+
+Starting a daemon is a real side effect, so the default is the one that asks
+least of you. Three options were considered:
+
+1. **Require the operator to run a daemon.** Lowest plugin complexity, but every
+   install becomes two steps, and a forgotten step leaves the plugin applying its
+   failure action — protection silently off or every call denied. Requiring a
+   manual step for the security control to work is the wrong default.
+2. **Evaluate in a short-lived child process, no daemon.** This is the design
+   that would avoid a long-lived process entirely, and it is not possible with
+   the upstream build. The policy engine is compiled into `agentjail`, the
+   daemon is the only thing that loads it, `agentjail-hook` forwards to the
+   daemon and **allows** the call when it cannot reach it, and the daemonless
+   fallback keeps only three self-protection rules. The measurements are in
+   `DESIGN.md` §3.3.1.
+3. **Supervise a daemon, and adopt one that is already running.** The plugin
+   starts a daemon only when nothing answers, and stops only what it started.
+
+Option 3 is the default because it needs no second step from you, never touches
+a daemon you run yourself, and never turns an unavailable engine into an allow.
+Set `daemon.supervise: false` if you would rather run the daemon yourself; the
+plugin then adopts whatever answers and starts nothing.
+
+### What the plugin does when it unloads
+
+Unloading is where a supervised process either cleans up or becomes litter, so
+the behavior is exact:
+
+- **A daemon the plugin started is signalled with `SIGTERM`,** to its process
+  group only. Upstream removes the socket and releases the database on a clean
+  exit, and the plugin waits for queued audit records to land first.
+- **A daemon the plugin did not start is never signalled.** Adopting a daemon
+  does not take ownership of it, so an unload cannot remove protection from
+  another session.
+- **A `SIGKILL` of the host process leaves the daemon running.** A detached child
+  is not tied to the parent's lifetime, and upstream's daemon has no
+  parent-death watchdog or idle self-exit. This is deliberate — the daemon is
+  meant to outlive one session — but it means an unclean kill leaves a daemon
+  behind. To stop a leftover daemon, find it by its socket and send `SIGTERM`;
+  upstream removes the socket and releases the database on a clean exit:
+
+  ```sh
+  pkill -TERM -f 'dsh-plugin-agentjail/run/daemon.sock'
+  ```
+
+  Do not rely on `agentjail daemon stop`: against a daemon started with an
+  explicit `--socket`, it waits on the control plane and does not return.
+
+- **The plugin's state root is not removed on unload.** The audit trail, the
+  daemon's database, and the control token are evidence and configuration, not
+  scratch space. Removing them is a separate, explicit act.
+
 ### You want to own the engine
 
 Point at a binary. Install AgentJail yourself and set `daemon.binary`, or put it

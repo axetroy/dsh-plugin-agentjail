@@ -35,7 +35,17 @@ const lockPath = join(packageRoot, 'vendor.lock.json')
 const vendorRoot = join(packageRoot, 'vendor')
 
 /** Files copied out of an archive into the vendored directory. */
-const VENDORED_FILES = ['agentjail', 'LICENSE', 'NOTICE', 'THIRD_PARTY_LICENSES']
+const VENDORED_FILES = ['agentjail', 'agentjail-hook', 'LICENSE', 'NOTICE', 'THIRD_PARTY_LICENSES']
+
+/**
+ * Vendored files that must be executable.
+ *
+ * `agentjail-hook` is the CLI's hook entry point. Upstream's `agentjail install`
+ * refuses to run without it next to the `agentjail` binary, so omitting it would
+ * leave the vendored CLI unable to install hooks even though the plugin itself
+ * only ever talks to the daemon.
+ */
+const EXECUTABLE_FILES = ['agentjail', 'agentjail-hook']
 
 /** Map a Node platform/arch pair onto a locked target label. */
 function targetLabel(platform, arch) {
@@ -120,24 +130,35 @@ async function vendorTarget(lock, label) {
       }
       await copyFile(source, join(destination, name))
     }
-    await chmod(join(destination, 'agentjail'), 0o755)
+    for (const name of EXECUTABLE_FILES) {
+      await chmod(join(destination, name), 0o755)
+    }
     process.stdout.write(`vendored ${label} (sha256 ${digest.slice(0, 12)}...)\n`)
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
 }
 
-/** Verify that a vendored target is present and executable. */
+/**
+ * Verify that a vendored target is present and executable.
+ *
+ * Every entry in `EXECUTABLE_FILES` is checked, not just `agentjail`: a vendor
+ * directory that lost `agentjail-hook` still answers the plugin's socket calls,
+ * so only an explicit check keeps the broken CLI from reaching a release.
+ */
 async function checkTarget(label) {
-  const binary = join(vendorRoot, label, 'agentjail')
-  try {
-    const info = await stat(binary)
-    process.stdout.write(`${label}: present (${info.size} bytes)\n`)
-    return true
-  } catch {
-    process.stdout.write(`${label}: missing\n`)
-    return false
+  let ok = true
+  for (const name of EXECUTABLE_FILES) {
+    const binary = join(vendorRoot, label, name)
+    try {
+      const info = await stat(binary)
+      process.stdout.write(`${label}/${name}: present (${info.size} bytes)\n`)
+    } catch {
+      process.stdout.write(`${label}/${name}: missing\n`)
+      ok = false
+    }
   }
+  return ok
 }
 
 /** Entry point. */

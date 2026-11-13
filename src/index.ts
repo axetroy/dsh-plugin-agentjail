@@ -613,11 +613,14 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     ctx.effect(() => () => clearInterval(timer))
   }
 
-  ctx.effect(() => () => {
+  ctx.effect(() => async () => {
     // Only a daemon this process started is signalled; an operator-managed one
     // keeps running so another session keeps its protection.
     supervisor.stop()
     client.close()
+    // Let queued audit appends land before the fiber is gone, so an unload
+    // followed immediately by process exit does not drop the last records.
+    await audit.flush()
   })
 
   logger?.info?.(

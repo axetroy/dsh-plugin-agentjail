@@ -144,6 +144,25 @@ committed artifact: a pinned version, the per-platform asset names, and a
 full-length SHA-256 for each. Edit the lock file to move to a new build; the lock
 file is a reviewed change on purpose.
 
+**Both upstream binaries are vendored.** A release archive holds `agentjail`
+(41 MB, the daemon and the only copy of the OPA/Rego engine) and
+`agentjail-hook` (6.7 MB, a single-shot forwarding layer). The plugin only ever
+talks to the daemon, but upstream's `agentjail install` aborts without
+`agentjail-hook` next to `agentjail`, so the script copies, chmods, and checks
+both. `vendor:check` and the CI pack check each assert both by name, not by
+counting files.
+
+**The engine is only reachable through the daemon.** `agentjail-hook` has no
+engine and FAILS OPEN when the socket is unreachable — its own embedded text
+warns that a prompt-injected agent can kill the daemon and slip a command
+through the window. `try --json` streams JSONL but still needs a live daemon,
+the daemon has no stdio transport, and the daemonless `hook-fallback.json` path
+keeps only three self-protection rules while allowing unmatched input. A
+daemonless design would invert this plugin's fail-closed contract, so it was
+rejected; the measurements are in `DESIGN.md` §3.3.1 and the upstream ask in
+`docs/UPSTREAM-OFFLINE-EVAL.md`. Do not "simplify" this into a per-call child
+process.
+
 **The digest is checked before extraction.** `scripts/vendor-agentjail.mjs`
 downloads the archive, hashes it, and refuses a mismatch before unpacking
 anything. A test asserts the comparison precedes the extraction call, so the
