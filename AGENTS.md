@@ -209,3 +209,26 @@ flagged line — that is the only position the suppression covers. Never write a
 literal `codeql[...]` outside a real suppression comment: the suppression query
 matches the text anywhere, including a comment that merely mentions the syntax,
 and produces a bogus suppression range.
+
+## The no-match signal
+
+AgentJail's engine reports "no rule matched" as a bare `{"action": "allow"}` with
+no `rule_id` — that is its own default decision (`agentpolicy/policies/default.rego`),
+and the daemon's resolver labels a synthesized default `resolver/default`, which
+its hook treats as "not a real rule". The plugin reads any of those as a no-match
+and applies the configured `defaultAction`. A rule-backed allow always names its
+`rule_id`, and a `would_action` means a rule matched in monitor mode, so neither is
+a no-match.
+
+This is why `renderEntrypoint` emits an explicit
+`{"action": "allow", "rule_id": "default/allow"}` for a no-match instead of a bare
+`allow`: the shipped templates are denylists, and without the id their permits
+would be read as no-matches and `defaultAction: deny` would turn them into
+deny-everything policies. `DEFAULT_ALLOW_RULE_ID` in `src/security/policy.ts` is
+the shared constant; a real-OPA test in `tests/unit/policy.test.ts` pins it.
+
+When adding a verdict field to the schema, wire it into `resolveDecision` and
+cover it with a test. Several fields once shipped read-but-unused
+(`defaultAction`, `askFallback`, `alertsEnabled`, the deny-rate alert, the
+reconnect backoff), which is worse than not having them: the configuration looks
+enforced and is not.
