@@ -1,0 +1,102 @@
+# DH-AgentJail bundle patch.
+#
+# Installed as a bundle, this layer inserts one row: the AgentJail security gate.
+# A profile that lists this bundle gets the plugin; the row's `config` is the
+# complete configuration, because a patch replaces the whole `config` value
+# rather than merging into it. Users override these keys in their profile's own
+# cordis.patch.yml without touching the package.
+#
+# The defaults below are the safe ones: enforce, fail closed, deny by default.
+# A deployment that wants a trial period should set `enforcement: monitor`
+# explicitly, and should treat the audit trail as the deliverable of that trial.
+
+- insert:
+    - id: agentjail
+      name: dsh-plugin-agentjail
+      config:
+        # `enforce` applies verdicts to the tool pipeline. `monitor` records
+        # verdicts and blocks nothing; use it to size a policy before trusting it.
+        enforcement: enforce
+
+        # Empty resolves to $AGENTJAIL_SOCKET, then ~/.agentjail/daemon.sock.
+        socketPath: ''
+
+        # Per-request policy budget. The design targets P95 < 50 ms; the timeout
+        # is the ceiling past which the failure action applies instead of waiting.
+        timeoutMs: 2000
+
+        # Fail-closed defaults. Do not change these to `allow`.
+        failureAction: deny
+        defaultAction: deny
+
+        # An explicit engine `ask` is surfaced to the Harness approval service
+        # when one is composed, and fails closed when one is not.
+        askAction: ask
+        askFallback: native
+
+        # Health probes: one at load, then on an interval. `0` disables the timer.
+        healthCheckOnLoad: true
+        healthCheckIntervalMs: 30000
+
+        # Re-assert denials so a later listener cannot re-open a blocked call.
+        monotonicGuard: true
+
+        # Keep the tool surface policy-governed. Add a name here only when you
+        # have decided that tool is safe to run unexamined.
+        exemptTools: []
+        exemptToolPrefixes: []
+
+        cache:
+          enabled: true
+          maxEntries: 1024
+          ttlMs: 5000
+
+        audit:
+          enabled: true
+          # `file` appends JSON Lines to `filePath`; `memory` keeps a ring buffer;
+          # `none` records nothing. An audit record never blocks a decision.
+          storage: file
+          filePath: ''
+          maxFileBytes: 8388608
+          maxRotatedFiles: 5
+          redactSensitiveData: true
+          maxValueChars: 256
+
+        approval:
+          grantsEnabled: true
+          sessionGrantTtlMs: 3600000
+          maxGrants: 512
+
+        governance:
+          alertsEnabled: true
+          denyRateAlertThreshold: 0.5
+          denyRateAlertMinSamples: 20
+          statsWindowMs: 300000
+          includePolicyDigest: true
+
+        # Daemon supervision. A daemon that is already answering is adopted and
+        # never signalled; one this plugin starts is stopped when it unloads.
+        daemon:
+          supervise: true
+          # Empty resolves $AGENTJAIL_BIN, then `agentjail` on PATH, then the
+          # managed directory below.
+          binary: ''
+          args: ['daemon']
+          startTimeoutMs: 10000
+          pollIntervalMs: 250
+          # Downloading a release binary is an explicit trust decision, so it is
+          # off by default. See docs/INSTALL.md before enabling it.
+          managedInstall: false
+          managedVersion: ''
+          managedDir: ''
+          downloadTimeoutMs: 120000
+          maxArchiveBytes: 67108864
+
+        # The dashboard is read-only and is served only when a Harness web server
+        # is composed. It cannot widen a policy, clear a denial, or change the
+        # failure posture.
+        ui:
+          enabled: true
+          basePath: /agentjail
+          refreshMs: 5000
+          recordLimit: 200

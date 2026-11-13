@@ -1,0 +1,110 @@
+# Release: version and publish with changesets, then npm trusted publishing.
+#
+# Two things happen here, both driven by `changesets/action`:
+#
+#   1. On a push to `main` that adds a changeset, it opens (or updates) a
+#      "Version Packages" pull request. That PR runs `changeset version`, which
+#      consumes every changeset, bumps `package.json`, and writes `CHANGELOG.md`.
+#      Nothing is published while that PR is open.
+#   2. When that PR is merged, `main` has no changesets left and a version bump,
+#      so it runs the publish command: `changeset publish` pushes the `v<version>`
+#      git tag, publishes to npm, and the action opens a GitHub release.
+#
+# Publishing uses npm trusted publishing (OIDC), not a token. There is no
+# `NPM_TOKEN` anywhere in this file. The `id-token: write` permission lets GitHub
+# mint a short-lived OIDC token that the npm CLI exchanges for a publish
+# credential scoped to this workflow. Nothing here can be replayed from a leaked
+# secret, because no long-lived secret is involved.
+#
+# One-time setup, a maintainer does each once:
+#   npmjs.com -> Package -> Settings -> Trusted publishing -> Add trusted publisher
+#     GitHub Actions, Organization or user `axetroy`,
+#     Repository `dsh-plugin-agentjail`, Workflow filename `release.yml`.
+#   Repository -> Settings -> Actions -> General -> Workflow permissions, and
+#     enable "Allow GitHub Actions to create and approve pull requests", so the
+#     action can open the Version Packages pull request with the built-in token.
+#
+# Requirements: npm CLI >= 11.5.1 and Node >= 22.14.0, which `setup-node`
+# satisfies below. Provenance is generated automatically for a public package
+# published from a public repository, so `--provenance` is not passed.
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  # Manual runs only report what a release would do. Publishing stays on the
+  # push path so a merge is the only way a version reaches the registry.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: version and publish
+    runs-on: ubuntu-latest
+    permissions:
+      # `changesets/action` opens the version pull request, pushes the release
+      # tag, and creates the GitHub release with this token.
+      contents: write
+      pull-requests: write
+      # Required for OIDC. The npm CLI mints its publish credential from it.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # A release build must not restore a cache a pull request could write.
+          package-manager-cache: false
+
+      - name: Confirm the npm CLI supports trusted publishing
+        run: |
+          version=$(npm --version)
+          echo "npm $version"
+          node -e "
+            const [major, minor, patch] = process.argv[1].split('.').map(Number)
+            const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)))
+            if (!ok) throw new Error('trusted publishing needs npm >= 11.5.1, found ' + process.argv[1])
+            console.log('npm CLI supports trusted publishing')
+          " "$version"
+
+      - name: Install
+        run: npm ci
+
+      # A version PR is only opened from a green tree, and a publish only ever
+      # runs after that PR merged, so this is the last gate before either. It runs
+      # the same sequence as CI, coverage floor included.
+      - name: Verify
+        run: |
+          npm run format:check
+          npm run lint
+          npm run typecheck
+          npm run test:coverage
+          npm run build
+
+      - name: Dry run
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          npx changeset status --verbose
+          npm pack --dry-run
+
+      - name: Version pull request, or publish
+        if: github.event_name == 'push'
+        uses: changesets/action@v1
+        with:
+          version: npm run version-packages
+          publish: npm run release
+          commit: 'chore: version packages'
+          title: 'chore: version packages'
+          # A tag is a release, so create the GitHub release the tag implies.
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

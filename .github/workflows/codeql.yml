@@ -1,0 +1,46 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  security-events: write
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze javascript-typescript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+          # The alert-suppression query is not in the default suite, and it is
+          # the only thing that marks a result as suppressed in the SARIF.
+          # Without this pack an inline `codeql[...]` comment does nothing.
+          packs: codeql/javascript-queries:AlertSuppression.ql
+      - uses: github/codeql-action/analyze@v3
+        id: analyze
+        with:
+          output: sarif-results
+      # GitHub code scanning ignores the SARIF `suppressions` property, so an
+      # inline `codeql[...]` comment on its own never closes an alert. This step
+      # reads the SARIF that was just uploaded and dismisses the results marked
+      # as suppressed, and re-opens one whose suppression was later removed.
+      # Without it the comment above the installer write is decorative and that
+      # alert stays open indefinitely.
+      - name: Dismiss suppressed alerts
+        if: github.ref == 'refs/heads/main'
+        uses: advanced-security/dismiss-alerts@a18f986bdb40edba0dd7a74382c15d4a3d50a1c8 # v2.0.3
+        with:
+          sarif-id: ${{ steps.analyze.outputs.sarif-id }}
+          sarif-file: sarif-results
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
