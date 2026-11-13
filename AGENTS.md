@@ -170,10 +170,15 @@ default security suite. Two findings shaped the code and should not be undone:
 - `js/http-to-file-access` (medium) fired on the installer writing a downloaded
   archive. The tag can arrive from a redirect target, so it is untrusted.
   `isSafeReleaseTag` restricts it to a release-tag shape and `joinInside` asserts
-  the write stays under the working directory. Both are deliberate input
-  validation, not suppression: a tag like `../../etc/passwd` is now rejected
-  before any request is made.
+  the write stays under the working directory, so a tag like `../../etc/passwd`
+  is rejected before any request is made. The write itself is the point of the
+  module, and it happens only past a SHA-256 comparison against the manifest.
+  CodeQL does not model a digest comparison as a sanitizer, so this one flow
+  carries an inline `// codeql[js/http-to-file-access]` with the reason written
+  above it. That is the only suppression in the tree; keep it that way, and keep
+  the reason next to it.
 
-Prefer fixing a CodeQL finding by validating the input at its source. Add an
-inline `// codeql[js/...]` suppression only when the flow is provably benign and
-say why in the comment.
+Prefer fixing a CodeQL finding by validating the input at its source. Use an
+inline `codeql[js/...]` comment only when the flow is provably benign, put the
+reason immediately above it, and place the comment on the line before the
+flagged line — that is the only position the suppression covers.

@@ -287,6 +287,14 @@ export async function installManagedBinary(
   const workdir = await mkdtemp(join(tmpdir(), 'agentjail-install-'))
   try {
     const archivePath = joinInside(workdir, asset)
+    // Writing the downloaded archive is the point of this module, and the bytes
+    // are only reachable past the digest check above: `actual` was compared to
+    // the manifest's `expected` and a mismatch returned already. CodeQL does not
+    // model a digest comparison as a sanitizer, so the flow is reported as
+    // network-data-to-file. The write is to a fresh temporary directory, under a
+    // name the tag validation above constrains, and nothing executes from it
+    // until extraction succeeds.
+    // codeql[js/http-to-file-access]
     await writeFile(archivePath, archive)
     let extracted: string
     try {
