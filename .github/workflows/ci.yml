@@ -128,11 +128,14 @@ jobs:
 
       - name: Check the vendored build ships in the package
         run: |
-          # --ignore-scripts keeps `prepare` from running tsdown, whose progress
-          # output would otherwise land in the JSON and break the parse.
-          npm pack --dry-run --json --ignore-scripts > "$RUNNER_TEMP/pack.json"
+          # `npm pack` runs `prepare`, whose build output shares stdout with the
+          # JSON, so the report is parsed out of the file rather than read whole.
+          npm pack --dry-run --json --ignore-scripts > "$RUNNER_TEMP/pack.txt"
           node -e "
-            const [entry] = require(process.env.RUNNER_TEMP + '/pack.json')
+            const { readFileSync } = require('node:fs')
+            const raw = readFileSync(process.env.RUNNER_TEMP + '/pack.txt', 'utf8')
+            const start = raw.indexOf('[')
+            const [entry] = JSON.parse(raw.slice(start))
             const vendored = entry.files.filter((f) => f.path.startsWith('vendor/'))
             if (vendored.length === 0) throw new Error('the package does not include the vendored build')
             console.log('package includes', vendored.length, 'vendored files')
