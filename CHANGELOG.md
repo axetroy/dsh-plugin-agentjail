@@ -28,6 +28,11 @@ changes are always called out under `### Changed` or `### Removed`.
   extracting anything. A missing manifest entry, a digest mismatch, or an
   oversized body installs nothing.
 - `AGENTJAIL_BIN`, read when `daemon.binary` is empty.
+- Release publishing now uses **npm trusted publishing** (OIDC) instead of a
+  long-lived `NPM_TOKEN`. The workflow requests `id-token: write`, asserts the
+  npm CLI is `>= 11.5.1` before publishing, and passes no `--provenance` flag
+  because trusted publishing generates provenance automatically. See
+  `CONTRIBUTING.md` for the one-time npm-side configuration.
 
 ### Changed
 
@@ -37,9 +42,17 @@ changes are always called out under `### Changed` or `### Removed`.
   now tests Node 22 and 24.
 - `npm run verify` runs `format:check` first, so the local command and CI run the
   same sequence.
+- `package.json` gained a `publishConfig` block recording `access: public` and
+  `provenance: true`, so a manual publish matches what CI produces.
 
 ### Fixed
 
+- A release tag read from a redirect target was interpolated into a file name and
+  a URL path without validation. A crafted tag such as `../../etc/passwd` could
+  steer the archive write outside the install directory. `isSafeReleaseTag` now
+  restricts a tag to a release-tag shape, and the archive write asserts
+  containment under the working directory. This addresses CodeQL
+  `js/http-to-file-access`.
 - The generated Rego templates were rejected by OPA: they used v0 syntax, mixed
   statements into object literals, declared `deny_rules` in one shared package
   across every template, and called a nonexistent `regex.find_all_stringify`.

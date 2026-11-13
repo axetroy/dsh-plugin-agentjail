@@ -27,6 +27,10 @@
   "bugs": {
     "url": "https://github.com/axetroy/dsh-plugin-agentjail/issues"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",

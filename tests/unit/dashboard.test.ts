@@ -219,6 +219,22 @@ function fakeServer() {
       routes.set(route.path, route.handler)
       return () => routes.delete(route.path)
     },
+    /**
+     * Dispatch a request through the recorded route.
+     *
+     * The lookup key comes from the request, so the result is narrowed with a
+     * `typeof` guard before it is invoked: a `Map.get` miss and a stored value
+     * of an unexpected shape both end as a 404 rather than a call.
+     */
+    dispatch(req: IncomingMessage, res: ServerResponse): void {
+      const path = (req.url ?? '').split('?')[0] ?? ''
+      const handler: unknown = routes.get(path)
+      if (typeof handler !== 'function') {
+        res.writeHead(404).end('not found')
+        return
+      }
+      handler(req, res)
+    },
   }
 }
 
@@ -238,15 +254,7 @@ describe('dashboard routes over HTTP', () => {
       '/agentjail/api/summary',
     ])
 
-    const http = createServer((req, res) => {
-      const path = (req.url ?? '').split('?')[0] ?? ''
-      const handler = server.routes.get(path)
-      if (handler === undefined) {
-        res.writeHead(404).end('not found')
-        return
-      }
-      handler(req, res)
-    })
+    const http = createServer((req, res) => server.dispatch(req, res))
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
     const { port } = http.address() as AddressInfo
     const base = `http://127.0.0.1:${port}`
@@ -296,14 +304,7 @@ describe('dashboard routes over HTTP', () => {
       refreshMs: 0,
       recordLimit: 10,
     })
-    const http = createServer((req, res) => {
-      const handler = server.routes.get((req.url ?? '').split('?')[0] ?? '')
-      if (handler === undefined) {
-        res.writeHead(404).end('not found')
-        return
-      }
-      handler(req, res)
-    })
+    const http = createServer((req, res) => server.dispatch(req, res))
     await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
     const { port } = http.address() as AddressInfo
     try {

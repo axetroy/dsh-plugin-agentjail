@@ -136,3 +136,44 @@ than install a plain dependency. `scripts/check-bundle.mjs` checks both in CI.
 The bundle patch `cordis.patch.yml` references the plugin by package name and by
 row id `agentjail` (matching the exported `name`). `scripts/check-exports.mjs`
 cross-checks that.
+
+## Releasing
+
+`.github/workflows/release.yml` publishes with **trusted publishing**: no npm
+token is stored anywhere. The job requests `id-token: write`, GitHub mints a
+short-lived OIDC token, and the npm CLI exchanges it for a publish credential
+scoped to this workflow and repository. Two floors come with it — npm CLI
+`>= 11.5.1` and Node `>= 22.14.0` — and the workflow asserts the npm version
+before publishing rather than relying on a token fallback that no longer exists.
+
+A maintainer configures the npm side once, in the package's **Settings →
+Trusted publishing** (GitHub Actions, `axetroy` / `dsh-plugin-agentjail` /
+`release.yml`). The configuration expires if it does not complete a first publish
+within two days. Provenance is automatic under trusted publishing, so the
+workflow does not pass `--provenance`; `publishConfig` in `package.json` records
+`access: public` and `provenance: true` for a manual publish.
+
+Do not reintroduce `NPM_TOKEN` or any `NODE_AUTH_TOKEN` into this workflow. If a
+release fails at publish, check the trusted-publisher configuration and the npm
+CLI version before reaching for a secret.
+
+## Security scanning
+
+CodeQL runs the `security-and-quality` query pack, so it reports more than the
+default security suite. Two findings shaped the code and should not be undone:
+
+- `js/unvalidated-dynamic-method-call` (high) fired on the test's route
+  dispatcher, which invoked a handler read from a `Map` keyed by the request URL.
+  `fakeServer().dispatch` now narrows the value with a `typeof` guard, so a miss
+  and an unexpected shape both become a 404 rather than a call. The production
+  route table is not keyed by request input; only the test helper was.
+- `js/http-to-file-access` (medium) fired on the installer writing a downloaded
+  archive. The tag can arrive from a redirect target, so it is untrusted.
+  `isSafeReleaseTag` restricts it to a release-tag shape and `joinInside` asserts
+  the write stays under the working directory. Both are deliberate input
+  validation, not suppression: a tag like `../../etc/passwd` is now rejected
+  before any request is made.
+
+Prefer fixing a CodeQL finding by validating the input at its source. Add an
+inline `// codeql[js/...]` suppression only when the flow is provably benign and
+say why in the comment.

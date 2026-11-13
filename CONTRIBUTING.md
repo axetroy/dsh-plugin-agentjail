@@ -134,6 +134,36 @@ A tag that does not match `package.json` fails the workflow before publishing,
 which is deliberate: a version skew between the registry and the repository is
 hard to notice and annoying to correct.
 
+### Publishing uses trusted publishing, not a token
+
+The workflow holds no npm token. It requests `id-token: write`, GitHub mints a
+short-lived OIDC token, and the npm CLI exchanges that for a publish credential
+scoped to this workflow and repository. A leaked log or a read of the workflow
+file therefore yields nothing reusable, and there is no secret to rotate.
+
+This is a one-time setup that a maintainer performs once, on npmjs.com:
+
+1. Open the package's **Settings → Trusted publishing → Add trusted publisher**.
+2. Choose **GitHub Actions** and fill in:
+   - **Organization or user**: `axetroy`
+   - **Repository**: `dsh-plugin-agentjail`
+   - **Workflow filename**: `release.yml` (the file name only, with the `.yml`)
+3. Save. The configuration must complete its first successful publish within two
+   days or it expires and must be recreated.
+4. Recommended, once a publish has succeeded: **Settings → Publishing access →
+   "Require two-factor authentication and disallow tokens"**. That setting does
+   not affect trusted publishers, which authenticate with OIDC.
+
+Two version floors come from trusted publishing: npm CLI `>= 11.5.1` and Node
+`>= 22.14.0`. The workflow pins Node 24 and asserts the npm version before it
+publishes, so a runner image that ships an older CLI fails loudly instead of
+falling back to a token that is not there.
+
+Provenance is generated automatically for a public package published from a
+public repository, so the workflow does not pass `--provenance`. If you publish
+by hand from a laptop, run `npm publish --access public`; `publishConfig` in
+`package.json` already sets `access: public` and `provenance: true`.
+
 ## License
 
 By contributing, you agree your contribution is licensed under

@@ -10,6 +10,7 @@ import {
   digestFromManifest,
   extractMember,
   installManagedBinary,
+  isSafeReleaseTag,
   sha256,
 } from '../../src/adapter/installer.js'
 
@@ -89,6 +90,54 @@ describe('release asset naming', () => {
   it('refuses platforms with no published archive', () => {
     expect(archiveName({ platform: 'win32', arch: 'x64' }, 'v1.8.2')).toBeUndefined()
     expect(archiveName({ platform: 'linux', arch: 'ia32' }, 'v1.8.2')).toBeUndefined()
+  })
+
+  it('refuses a tag that could steer a write outside the install directory', () => {
+    const facts = { platform: 'linux', arch: 'x64' }
+    for (const hostile of [
+      '../../etc/passwd',
+      'v1.0.0/../../evil',
+      'v1.0.0\nX',
+      '/absolute/path',
+      'v1.0.0;rm -rf /',
+      '',
+    ]) {
+      expect(archiveName(facts, hostile)).toBeUndefined()
+    }
+  })
+
+  it('accepts the tag shapes a release actually uses', () => {
+    const facts = { platform: 'linux', arch: 'x64' }
+    expect(archiveName(facts, 'v1.8.2')).toContain('agentjail-v1.8.2-linux-amd64.tar.gz')
+    expect(archiveName(facts, '1.8.2')).toContain('agentjail-1.8.2-linux-amd64.tar.gz')
+    expect(archiveName(facts, 'v1.8.2-rc.1')).toContain('agentjail-v1.8.2-rc.1-linux-amd64.tar.gz')
+  })
+})
+
+describe('release tag validation', () => {
+  it('accepts semantic release tags', () => {
+    for (const tag of ['v1.8.2', '1.8.2', 'v0.0.1', 'v1.8.2-rc.1', 'v1.8.2-beta.3']) {
+      expect(isSafeReleaseTag(tag)).toBe(true)
+    }
+  })
+
+  it('rejects anything that could escape a directory or a URL path', () => {
+    for (const tag of [
+      '..',
+      '../..',
+      'v1.0.0/../..',
+      'a/b',
+      'v1.0.0\\..\\..',
+      '/etc/passwd',
+      'v1.0.0 ',
+      ' v1.0.0',
+      'v1.0.0;id',
+      'v1.0.0`id`',
+      '',
+      'latest',
+    ]) {
+      expect(isSafeReleaseTag(tag)).toBe(false)
+    }
   })
 })
 
@@ -284,6 +333,46 @@ describe('managed install over HTTP', () => {
     )
     expect(result.installed).toBe(false)
     expect(result.reason).toContain('no AgentJail release archive')
+  })
+
+  it('refuses a configured version that could escape the install directory', async () => {
+    const managedDir = join(root, 'managed-traversal')
+    // The manifest would serve a digest, but the tag is rejected before any
+    // request, so a crafted version cannot steer a write outside managedDir.
+    const result = await installManagedBinary(
+      { ...optionsFor('http://127.0.0.1:1', managedDir), version: '../../../../tmp/evil' },
+      facts,
+    )
+    expect(result.installed).toBe(false)
+    expect(result.reason).toContain('no AgentJail release archive')
+    await expect(readFile(join(managedDir, 'agentjail'))).rejects.toThrow()
+  })
+
+  it('refuses a tag parsed from a redirect that is not a release tag', async () => {
+    // A hostile or compromised host could redirect to a path carrying `..`.
+    // The tag is read from that path, so it must be rejected before it reaches
+    // a file name.
+    const redirecting = createServer((req, res) => {
+      const host = req.headers.host ?? '127.0.0.1'
+      if (req.url === '/latest/download/SHA256SUMS') {
+        res.writeHead(302, { location: `http://${host}/download/../../evil/SHA256SUMS` }).end()
+        return
+      }
+      res.writeHead(404).end('not found')
+    })
+    await new Promise<void>((resolve) => redirecting.listen(0, '127.0.0.1', resolve))
+    const address = redirecting.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    try {
+      const result = await installManagedBinary(
+        { ...optionsFor(`http://127.0.0.1:${port}`, join(root, 'managed-badtag')), version: '' },
+        facts,
+      )
+      expect(result.installed).toBe(false)
+    } finally {
+      redirecting.closeAllConnections?.()
+      await new Promise<void>((resolve) => redirecting.close(() => resolve()))
+    }
   })
 
   it('resolves the latest tag from the release redirect', async () => {

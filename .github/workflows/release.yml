@@ -1,3 +1,23 @@
+# Release: publish to npm with trusted publishing (OIDC).
+#
+# There is no npm token in this workflow. The `id-token: write` permission lets
+# GitHub Actions mint a short-lived OIDC token, and the npm CLI exchanges it for
+# a publish credential scoped to this workflow. Nothing here can be replayed
+# from a leaked secret, because no long-lived secret is involved.
+#
+# One-time setup on npmjs.com (a maintainer does this once per package):
+#   Package -> Settings -> Trusted publishing -> Add trusted publisher ->
+#   GitHub Actions, with:
+#     Organization or user : axetroy
+#     Repository           : dsh-plugin-agentjail
+#     Workflow filename    : release.yml
+#   Then, for maximum security: Settings -> Publishing access ->
+#   "Require two-factor authentication and disallow tokens".
+#
+# Requirements: npm CLI >= 11.5.1 and Node >= 22.14.0, which `setup-node`
+# satisfies below. Provenance is generated automatically for a public package
+# published from a public repository, so `--provenance` is not passed.
+
 name: Release
 
 on:
@@ -11,21 +31,36 @@ on:
         default: true
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   publish:
     name: publish to npm
     runs-on: ubuntu-latest
+    permissions:
+      # Required for OIDC. Granting it at the job keeps the rest read-only.
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: npm
-          registry-url: https://registry.npmjs.org
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          # A release build must not restore a cache a pull request could write.
+          package-manager-cache: false
+
+      - name: Confirm the npm CLI supports trusted publishing
+        run: |
+          version=$(npm --version)
+          echo "npm $version"
+          node -e "
+            const [major, minor, patch] = process.argv[1].split('.').map(Number)
+            const ok = major > 11 || (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)))
+            if (!ok) throw new Error('trusted publishing needs npm >= 11.5.1, found ' + process.argv[1])
+            console.log('npm CLI supports trusted publishing')
+          " "$version"
 
       - name: Install
         run: npm ci
@@ -50,9 +85,10 @@ jobs:
 
       - name: Publish
         if: github.event_name == 'push'
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment and uses
+        # the short-lived credential it mints from it. `--provenance` is omitted
+        # because trusted publishing generates provenance automatically.
+        run: npm publish --access public
 
       - name: GitHub release
         if: github.event_name == 'push'
@@ -60,3 +96,5 @@ jobs:
         with:
           generate_release_notes: true
           draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

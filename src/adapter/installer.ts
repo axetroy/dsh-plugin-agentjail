@@ -30,7 +30,7 @@ import { execFile } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFile)
@@ -40,6 +40,46 @@ export const DEFAULT_RELEASE_BASE_URL = 'https://github.com/LuD1161/agentjail/re
 
 /** Platforms with published release archives. */
 const SUPPORTED_PLATFORMS = new Set(['linux', 'darwin'])
+
+/**
+ * Release tags this installer accepts: an optional leading `v`, then
+ * dot-separated numeric components with an optional pre-release suffix.
+ *
+ * The tag can arrive from a redirect target rather than from configuration, so
+ * it is treated as untrusted input. It is interpolated into a URL path and an
+ * archive file name, which means a tag carrying `..` or a path separator could
+ * otherwise steer a write outside the install directory. The pattern admits only
+ * characters that appear in a real tag, so no such value can pass.
+ */
+const RELEASE_TAG_PATTERN = /^v?\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?$/
+
+/**
+ * Whether a release tag is safe to interpolate into a URL and a file name.
+ * @param version - the candidate tag.
+ * @returns true when the tag matches the accepted shape.
+ */
+export function isSafeReleaseTag(version: string): boolean {
+  return RELEASE_TAG_PATTERN.test(version)
+}
+
+/**
+ * Join a path onto a directory, refusing anything that escapes it.
+ *
+ * Belt-and-braces with {@link isSafeReleaseTag}: even with a validated tag, the
+ * caller that writes the archive asserts containment rather than assuming it.
+ * @param directory - the directory the result must stay inside.
+ * @param name - the entry name to join.
+ * @returns the joined absolute path.
+ * @throws when the joined path leaves `directory`.
+ */
+function joinInside(directory: string, name: string): string {
+  const root = resolve(directory)
+  const joined = resolve(root, basename(name))
+  if (joined !== root && !joined.startsWith(root + sep)) {
+    throw new Error(`refusing to write outside ${root}: ${name}`)
+  }
+  return joined
+}
 
 /** Architectures with published release archives, mapped to release naming. */
 const ARCHITECTURE_ALIASES: Record<string, string> = {
@@ -89,6 +129,10 @@ export function archiveName(facts: PlatformFacts, version: string): string | und
   if (!SUPPORTED_PLATFORMS.has(facts.platform)) return undefined
   const arch = ARCHITECTURE_ALIASES[facts.arch]
   if (arch === undefined) return undefined
+  // A tag reaches this function from configuration or from a redirect target.
+  // Rejecting anything outside the release-tag shape keeps a crafted tag from
+  // becoming part of a file name or a URL path.
+  if (!isSafeReleaseTag(version)) return undefined
   return `agentjail-${version}-${facts.platform}-${arch}.tar.gz`
 }
 
@@ -242,7 +286,7 @@ export async function installManagedBinary(
 
   const workdir = await mkdtemp(join(tmpdir(), 'agentjail-install-'))
   try {
-    const archivePath = join(workdir, asset)
+    const archivePath = joinInside(workdir, asset)
     await writeFile(archivePath, archive)
     let extracted: string
     try {
@@ -282,7 +326,10 @@ async function resolveLatestVersion(options: InstallerOptions): Promise<string |
     // The redirect target carries the tag: /releases/download/<tag>/...
     const final = response.url
     const match = /\/download\/([^/]+)\//.exec(final)
-    return match?.[1]
+    const tag = match?.[1]
+    // The tag comes from a redirect, so it is untrusted until it matches the
+    // release-tag shape.
+    return tag !== undefined && isSafeReleaseTag(tag) ? tag : undefined
   } catch {
     return undefined
   }

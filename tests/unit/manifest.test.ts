@@ -126,3 +126,34 @@ describe('checked-in policy bundle', () => {
     expect(names).toContain(ENTRYPOINT_FILE)
   })
 })
+
+describe('release workflow', () => {
+  const release = readFileSync(resolve(root, '.github/workflows/release.yml'), 'utf8')
+  // Strip comment lines: the prose explains that no token is used and would
+  // otherwise satisfy a substring check for one.
+  const effective = release
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('#'))
+    .join('\n')
+
+  it('publishes with OIDC, so it needs id-token: write', () => {
+    expect(effective).toMatch(/id-token:\s*write/)
+  })
+
+  it('holds no npm token, because trusted publishing does not need one', () => {
+    // A regression here would silently restore a long-lived credential to the
+    // release path, which is exactly what trusted publishing removes.
+    expect(effective).not.toMatch(/NPM_TOKEN/)
+    expect(effective).not.toMatch(/NODE_AUTH_TOKEN/)
+    expect(effective).not.toMatch(/secrets\.NPM/)
+  })
+
+  it('asserts the npm CLI version trusted publishing requires', () => {
+    expect(effective).toContain('11.5.1')
+  })
+
+  it('checks the tag matches package.json before publishing', () => {
+    expect(effective).toContain('GITHUB_REF_NAME')
+    expect(effective).toMatch(/does not match package.json/)
+  })
+})
