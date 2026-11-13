@@ -162,8 +162,20 @@ describe('codeql workflow', () => {
   const codeql = readFileSync(resolve(root, '.github/workflows/codeql.yml'), 'utf8')
 
   it('loads the alert-suppression query, without which suppressions are inert', () => {
-    // An inline `codeql[...]` comment does nothing unless this query runs, and it
-    // is not part of the default suite, so the pack has to be requested by name.
+    // The query is not in the default suite, so the pack has to be named. With
+    // it absent, the inline suppression in the installer is not even parsed.
     expect(codeql).toMatch(/packs:\s*codeql\/javascript-queries:AlertSuppression\.ql/)
+  })
+
+  it('dismisses suppressed alerts, because code scanning ignores suppressions', () => {
+    // GitHub code scanning does not act on the SARIF `suppressions` property, so
+    // the pack above only makes the suppression visible. This step is what turns
+    // it into a closed alert; drop it and the installer alert reopens.
+    expect(codeql).toMatch(/advanced-security\/dismiss-alerts@[0-9a-f]{40}/)
+  })
+
+  it('keeps the SARIF the dismiss step reads in a directory analyze writes', () => {
+    expect(codeql).toMatch(/output:\s*sarif-results/)
+    expect(codeql).toMatch(/sarif-file:\s*sarif-results/)
   })
 })

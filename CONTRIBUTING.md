@@ -104,6 +104,20 @@ node -e "
   makes the behavior change unreviewable.
 - The PR template's security-impact section is required, not optional.
 
+## Suppressing a CodeQL alert
+
+Code scanning does not honor the SARIF `suppressions` property, so an inline
+`codeql[...]` comment alone closes nothing. Suppression takes two steps in
+`codeql.yml`, and a test in `tests/unit/manifest.test.ts` asserts both are
+present: the `AlertSuppression.ql` pack on `init`, which is what marks a result
+as suppressed, and the `advanced-security/dismiss-alerts` step, which turns that
+mark into a dismissal through the API. Both are explained in `AGENTS.md`.
+
+Prefer fixing a finding by validating its input. Reach for a suppression only
+when the flow is provably benign, and write the reason directly above the
+comment. Do not write the literal `codeql[...]` text in a comment that is not a
+suppression — the suppression query matches the text wherever it appears.
+
 ## Documentation
 
 Behavior changes need a documentation change in the same pull request. The

@@ -178,13 +178,34 @@ default security suite. Two findings shaped the code and should not be undone:
   above it. That is the only suppression in the tree; keep it that way, and keep
   the reason next to it.
 
-An inline suppression is inert unless the alert-suppression query runs, and it
-is not in the default suite. `codeql.yml` therefore passes
-`packs: codeql/javascript-queries:AlertSuppression.ql` to `init`. Remove that
-line and the comment above the write stops working — the alert reopens with no
-other change, which is a confusing way to find out.
+## Inline suppressions need two steps, not one
+
+GitHub code scanning does **not** act on the SARIF `suppressions` property. A
+CodeQL maintainer states it plainly in
+[codeql-action#1230](https://github.com/github/codeql-action/issues/1230):
+"Code scanning does not support suppressions. ... It will be ignored by code
+scanning." The alert state enum has no `suppressed` value either, only `open`,
+`dismissed`, and `fixed`. So an inline `codeql[...]` comment by itself closes
+nothing, no matter where it is placed.
+
+Making a suppression real takes both of these in `codeql.yml`:
+
+1. `packs: codeql/javascript-queries:AlertSuppression.ql` on `init`. The
+   alert-suppression query is not in the default suite, so without this the
+   comment is not even parsed and the SARIF carries no `suppressions` entry.
+2. The `advanced-security/dismiss-alerts` step after `analyze`. It reads the
+   local SARIF, matches suppressed results to alerts by rule id, file, line, and
+   column, and dismisses them through the API — and re-opens an alert whose
+   suppression was removed. It runs on `main` only, since a dismissal is
+   repository state, not a per-PR fact.
+
+If you remove either step, the installer alert reopens with no other change.
+Both are covered by tests in `tests/unit/manifest.test.ts`.
 
 Prefer fixing a CodeQL finding by validating the input at its source. Use an
 inline `codeql[js/...]` comment only when the flow is provably benign, put the
 reason immediately above it, and place the comment on the line before the
-flagged line — that is the only position the suppression covers.
+flagged line — that is the only position the suppression covers. Never write a
+literal `codeql[...]` outside a real suppression comment: the suppression query
+matches the text anywhere, including a comment that merely mentions the syntax,
+and produces a bogus suppression range.
