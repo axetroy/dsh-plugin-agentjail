@@ -178,6 +178,12 @@ default security suite. Two findings shaped the code and should not be undone:
   above it. That is the only suppression in the tree; keep it that way, and keep
   the reason next to it.
 
+An inline suppression is inert unless the alert-suppression query runs, and it
+is not in the default suite. `codeql.yml` therefore passes
+`packs: codeql/javascript-queries:AlertSuppression.ql` to `init`. Remove that
+line and the comment above the write stops working — the alert reopens with no
+other change, which is a confusing way to find out.
+
 Prefer fixing a CodeQL finding by validating the input at its source. Use an
 inline `codeql[js/...]` comment only when the flow is provably benign, put the
 reason immediately above it, and place the comment on the line before the

@@ -53,7 +53,9 @@ changes are always called out under `### Changed` or `### Removed`.
   restricts a tag to a release-tag shape, and the archive write asserts
   containment under the working directory. This addresses CodeQL
   `js/http-to-file-access`.
-
+- The CodeQL workflow did not load the alert-suppression query, so an inline
+  `codeql[...]` comment was inert and the alert it covered stayed open. The
+  workflow now requests `codeql/javascript-queries:AlertSuppression.ql`.
 - The generated Rego templates were rejected by OPA: they used v0 syntax, mixed
   statements into object literals, declared `deny_rules` in one shared package
   across every template, and called a nonexistent `regex.find_all_stringify`.

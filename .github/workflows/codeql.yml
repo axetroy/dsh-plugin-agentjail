@@ -22,4 +22,9 @@ jobs:
         with:
           languages: javascript-typescript
           queries: security-and-quality
+          # Inline `codeql[...]` suppressions only take effect when the
+          # alert-suppression query runs, and it is not part of the default
+          # suite. Without this pack a suppression comment is inert and the
+          # alert it covers stays open.
+          packs: codeql/javascript-queries:AlertSuppression.ql
       - uses: github/codeql-action/analyze@v3
