@@ -56,7 +56,7 @@ jobs:
       # Required for OIDC. The npm CLI mints its publish credential from it.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
