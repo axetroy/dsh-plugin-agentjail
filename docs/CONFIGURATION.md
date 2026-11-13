@@ -275,13 +275,29 @@ a running daemon; it just starts and stops nothing.
 
 ### `daemon.binary`
 
-Default `''`. Empty resolves `$AGENTJAIL_BIN`, then `agentjail` on `PATH`, then
-the managed directory. A configured path is authoritative: if it is not an
-executable regular file, the plugin reports it and does not fall back.
+Default `''`. Empty resolves `$AGENTJAIL_BIN`, then the vendored build inside the
+package, then `agentjail` on `PATH`, then the managed directory. A configured path
+is authoritative: if it is not an executable regular file, the plugin reports it
+and does not fall back.
 
 ### `daemon.args`
 
-Default `['daemon']`. The argument vector used to start the daemon.
+Default `['daemon']`. The argument vector used to start the daemon. The plugin
+appends `--socket`, `--db`, and `--log` pointing at the plugin's own state
+directory, because upstream's daemon does not read `AGENTJAIL_SOCKET`.
+
+### `daemon.stateDir`
+
+Default `''`, which resolves `$HOME/.agentjail/dsh-plugin-agentjail`. The plugin's
+private state root. The daemon's socket, database, log, and private `HOME` all live
+under it, so two plugin instances do not share an engine.
+
+### `daemon.requireSupportedVersion`
+
+Default `true`. The plugin runs `<binary> --no-color version` and refuses to start
+a build outside its supported window (`>=1.8.0 <2.0.0`). A refused binary leaves
+the plugin on its `failureAction`. The window is fixed for a given plugin release;
+this field only turns the check off.
 
 ### `daemon.startTimeoutMs`, `daemon.pollIntervalMs`
 

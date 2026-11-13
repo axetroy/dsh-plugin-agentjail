@@ -306,6 +306,41 @@ export interface SecurityRequest {
 
 建议避免直接依赖 AgentJail 的内部数据库结构或未承诺稳定的内部函数。
 
+### 3.3.1 实测结论：为什么必须常驻守护进程
+
+设计阶段曾评估过「不常驻守护进程，改为插件按需拉起一个短命进程、用 stdin/stdout 通信」的方案。对锁定版本 `v1.8.2` 的二进制实测后，该方案不可行，结论记录在此以免重复论证。
+
+实测事实（通过运行二进制得到，非阅读上游源码）：
+
+| 事实 | 证据 |
+|---|---|
+| release 包含两个可执行文件 | `agentjail`（41 MB）与 `agentjail-hook`（6.7 MB） |
+| 策略引擎只编译进 `agentjail` | `agentjail-hook` 内 OPA/Rego 相关符号仅 31 处，`agentjail` 约 6747 处 |
+| `agentjail-hook` 是单次转发的 stdin/stdout 层 | 喂入一行 hook JSON，输出一行判定 JSON，随后退出 |
+| `agentjail-hook` 在连不上守护进程时 **fail-open（放行）** | 无守护进程时 `rm -rf /` 返回 `permissionDecision: allow` |
+| 上游自述这是攻击面 | 二进制内嵌原文："agentjail-hook FAILS OPEN: if it cannot reach the daemon socket it ALLOWS the call … A prompt-injected or adversarial agent can abuse this by killing the daemon and slipping a command through the fail-open window" |
+| `try --json` 支持 JSONL stdin/stdout，但**仍要求守护进程在线** | 无守护进程时返回 `{"action":"error","error":"daemon not reachable …"}` |
+| 守护进程只监听 Unix domain socket，无 stdio 传输 | `--socket stdio` 不进入 stdio 模式 |
+| 唯一的无守护进程路径是离线降级，仅保留 3 条自保护规则 | `hook-fallback.json` 仅含 `file_policy/agentjail_self`、`file_policy/agentjail_secrets`、`command_policy/no-policy-mutation`，其余策略关闭，且未命中时仍放行 |
+
+因此：
+
+1. **引擎只能经守护进程访问。** 任何「一次性进程内评估」都缺少引擎本体。
+2. **无守护进程的路径全部 fail-open 或退化为固定子集。** 本插件是安全控制，5.2 要求 Fail-Closed；建在 fail-open 路径上会与本项目的安全方向相反——攻击者杀掉守护进程即可让命令穿过。
+3. **每次工具调用重启 CLI 会重复编译 Rego bundle 并重读策略 overlay**，与 7.1 的 P95 < 50 ms 目标冲突。
+
+**结论：继续采用守护进程模型。** 若上游未来提供「离线、fail-closed 的一次性评估入口」，可重新评估。向上游提出该需求的草稿见 `docs/UPSTREAM-OFFLINE-EVAL.md`。
+
+### 3.3.2 vendoring 必须包含两个二进制
+
+上游 release 同时提供 `agentjail` 与 `agentjail-hook`。本插件自身只通过 socket 与守护进程通信，不使用 `agentjail-hook`；但上游 CLI 的 `install` 流程会在 `agentjail` 同级目录查找 `agentjail-hook`，缺失时直接失败：
+
+```
+✗ agentjail install: daemon preamble: locate agentjail-hook: agentjail-hook not found next to the agentjail binary or in PATH
+```
+
+因此 `scripts/vendor-agentjail.mjs` 复制并 `chmod` 两个二进制，`vendor:check` 与 CI 打包检查也各自断言两者都存在。
+
 ## 3.4 Harness 原生插件接入
 
 DeepSeek Harness 使用 Cordis 插件机制，支持通过 `tools/pre-execute` 实现原生工具执行拦截。

@@ -10,8 +10,10 @@ import {
   hasManagedBinary,
   isExecutable,
   resolveDaemonBinary,
+  type BinaryVersionCheck,
   type SupervisorOptions,
 } from '../../src/adapter/supervisor.js'
+import { classifyVersion, parseVersion } from '../../src/adapter/version.js'
 
 async function scratch(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'agentjail-sup-'))
@@ -25,15 +27,27 @@ async function fakeBinary(directory: string, name = DAEMON_BINARY_NAME): Promise
   return path
 }
 
+/** A stand-in binary that stays alive, so a spawned child is still running. */
+async function sleepingBinary(directory: string, name = DAEMON_BINARY_NAME): Promise<string> {
+  await mkdir(directory, { recursive: true })
+  const path = join(directory, name)
+  await writeFile(path, '#!/bin/sh\nsleep 60\n')
+  await chmod(path, 0o755)
+  return path
+}
+
 function options(overrides: Partial<SupervisorOptions> = {}): SupervisorOptions {
   return {
     enabled: true,
     binary: '',
     socketPath: '/tmp/does-not-matter.sock',
     managedDir: '/nonexistent-managed-dir',
+    vendoredDir: '/nonexistent-vendored-dir',
+    stateDir: '/tmp/agentjail-supervisor-test-state',
     args: ['daemon'],
     startTimeoutMs: 200,
     pollIntervalMs: 10,
+    requireSupportedVersion: false,
     ...overrides,
   }
 }
@@ -71,7 +85,7 @@ describe('binary discovery', () => {
     const configuredPath = await fakeBinary(configured)
     await fakeBinary(onPath)
     const resolved = resolveDaemonBinary(
-      { binary: configuredPath, managedDir: '/nonexistent' },
+      { binary: configuredPath, managedDir: '/nonexistent', vendoredDir: '/nonexistent-vendored' },
       { PATH: onPath, AGENTJAIL_BIN: join(onPath, DAEMON_BINARY_NAME) },
     )
     expect(resolved).toEqual({ path: configuredPath, source: 'config' })
@@ -85,7 +99,11 @@ describe('binary discovery', () => {
     // different binary found on PATH would be the surprising outcome.
     expect(
       resolveDaemonBinary(
-        { binary: join(dir, 'missing'), managedDir: '/nonexistent' },
+        {
+          binary: join(dir, 'missing'),
+          managedDir: '/nonexistent',
+          vendoredDir: '/nonexistent-vendored',
+        },
         { PATH: onPath },
       ),
     ).toBeUndefined()
@@ -105,7 +123,7 @@ describe('binary discovery', () => {
     const explicitPath = await fakeBinary(explicit)
     await fakeBinary(onPath)
     const resolved = resolveDaemonBinary(
-      { binary: '', managedDir: '/nonexistent' },
+      { binary: '', managedDir: '/nonexistent', vendoredDir: '/nonexistent-vendored' },
       { PATH: onPath, AGENTJAIL_BIN: explicitPath },
     )
     expect(resolved).toEqual({ path: explicitPath, source: 'environment' })
@@ -115,7 +133,7 @@ describe('binary discovery', () => {
     const managed = await scratch()
     const managedPath = await fakeBinary(managed)
     const resolved = resolveDaemonBinary(
-      { binary: '', managedDir: managed },
+      { binary: '', managedDir: managed, vendoredDir: '/nonexistent-vendored' },
       { PATH: '/nonexistent-path' },
     )
     expect(resolved).toEqual({ path: managedPath, source: 'managed' })
@@ -123,7 +141,10 @@ describe('binary discovery', () => {
 
   it('reports nothing when no binary is anywhere', () => {
     expect(
-      resolveDaemonBinary({ binary: '', managedDir: '/nonexistent' }, { PATH: '/nonexistent' }),
+      resolveDaemonBinary(
+        { binary: '', managedDir: '/nonexistent', vendoredDir: '/nonexistent-vendored' },
+        { PATH: '/nonexistent' },
+      ),
     ).toBeUndefined()
   })
 
@@ -231,5 +252,234 @@ describe('daemon supervision', () => {
     })
     expect(supervisor.resolved).toEqual({ path, source: 'config' })
     supervisor.stop()
+  })
+})
+
+/** A version reader that always reports a fixed version. */
+function versionReader(text: string) {
+  return async (
+    _binary: string,
+    window: { min: string; maxMajor: number },
+  ): Promise<BinaryVersionCheck> => {
+    const version = parseVersion(text)
+    return { compatibility: classifyVersion(version, window), ...(version ? { version } : {}) }
+  }
+}
+
+describe('vendored binary preference', () => {
+  it('prefers the vendored build over one on PATH', async () => {
+    const vendored = await scratch()
+    const onPath = await scratch()
+    const vendoredPath = await fakeBinary(vendored)
+    await fakeBinary(onPath)
+    const resolved = resolveDaemonBinary(
+      { binary: '', managedDir: '/nonexistent', vendoredDir: vendored },
+      { PATH: onPath },
+    )
+    // The plugin is tested against the build it ships, so that build wins over
+    // whatever version happens to be on PATH.
+    expect(resolved).toEqual({ path: vendoredPath, source: 'vendored' })
+  })
+
+  it('lets explicit configuration override the vendored build', async () => {
+    const vendored = await scratch()
+    const configured = await scratch()
+    await fakeBinary(vendored)
+    const configuredPath = await fakeBinary(configured)
+    const resolved = resolveDaemonBinary(
+      { binary: configuredPath, managedDir: '/nonexistent', vendoredDir: vendored },
+      { PATH: '/nonexistent' },
+    )
+    expect(resolved).toEqual({ path: configuredPath, source: 'config' })
+  })
+
+  it('lets AGENTJAIL_BIN override the vendored build', async () => {
+    const vendored = await scratch()
+    const explicit = await scratch()
+    await fakeBinary(vendored)
+    const explicitPath = await fakeBinary(explicit)
+    const resolved = resolveDaemonBinary(
+      { binary: '', managedDir: '/nonexistent', vendoredDir: vendored },
+      { PATH: '/nonexistent', AGENTJAIL_BIN: explicitPath },
+    )
+    expect(resolved).toEqual({ path: explicitPath, source: 'environment' })
+  })
+})
+
+describe('version gating', () => {
+  it('refuses to start a binary outside the supported window', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), requireSupportedVersion: true }),
+    )
+    const outcome = await supervisor.ensure(async () => false, versionReader('v9.9.9'))
+    expect(outcome.state).toBe('incompatible')
+    expect(outcome.managed).toBe(false)
+    expect(outcome.reason).toContain('v9.9.9')
+    // Nothing was started, so a broken release cannot become the engine.
+    expect(supervisor.attempts).toBe(0)
+  })
+
+  it('refuses a binary older than the supported window', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), requireSupportedVersion: true }),
+    )
+    const outcome = await supervisor.ensure(async () => false, versionReader('v1.0.0'))
+    expect(outcome.state).toBe('incompatible')
+    expect(outcome.reason).toContain('predates')
+  })
+
+  it('refuses a binary whose version cannot be read', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), requireSupportedVersion: true }),
+    )
+    const outcome = await supervisor.ensure(async () => false, versionReader('dev build'))
+    expect(outcome.state).toBe('incompatible')
+    expect(outcome.reason).toContain('unknown')
+  })
+
+  it('starts a binary inside the supported window', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({
+        binary: join(dir, DAEMON_BINARY_NAME),
+        requireSupportedVersion: true,
+        startTimeoutMs: 2000,
+      }),
+    )
+    let calls = 0
+    const outcome = await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    }, versionReader('v1.8.2'))
+    expect(outcome.state).toBe('started')
+    expect(supervisor.version?.version?.raw).toBe('v1.8.2')
+    supervisor.stop()
+  })
+
+  it('starts an unverifiable binary when the check is disabled', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({
+        binary: join(dir, DAEMON_BINARY_NAME),
+        requireSupportedVersion: false,
+        startTimeoutMs: 2000,
+      }),
+    )
+    let calls = 0
+    const outcome = await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    }, versionReader('v9.9.9'))
+    expect(outcome.state).toBe('started')
+    supervisor.stop()
+  })
+
+  it('honours an injected window', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({
+        binary: join(dir, DAEMON_BINARY_NAME),
+        requireSupportedVersion: true,
+        versionWindow: { min: '2.0.0', maxMajor: 3 },
+      }),
+    )
+    const outcome = await supervisor.ensure(async () => false, versionReader('v1.8.2'))
+    expect(outcome.state).toBe('incompatible')
+  })
+})
+
+describe('restart', () => {
+  it('restarts a daemon it started', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), startTimeoutMs: 2000 }),
+    )
+    let calls = 0
+    await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    })
+    expect(supervisor.restart()).toBeTypeOf('number')
+    supervisor.stop()
+  })
+
+  it('keeps ownership of a daemon it started across repeated passes', async () => {
+    const dir = await scratch()
+    await fakeBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), startTimeoutMs: 2000 }),
+    )
+    let calls = 0
+    await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    })
+    expect(supervisor.managed).toBe(true)
+    // A second pass with a healthy daemon must not disown it, or `stop()` would
+    // leave the process running and reload would stop being attempted.
+    const second = await supervisor.ensure(async () => true)
+    expect(second.state).toBe('started')
+    expect(second.managed).toBe(true)
+    expect(supervisor.stop()).toBe(true)
+  })
+
+  it('refuses to restart a daemon it did not start', async () => {
+    const supervisor = new DaemonSupervisor(options())
+    await supervisor.ensure(async () => true)
+    expect(supervisor.restart()).toBeUndefined()
+  })
+
+  it('reports a stopped managed daemon as no longer answering', async () => {
+    // `stop()` must not leave the supervisor claiming a live managed daemon.
+    const dir = await scratch()
+    await sleepingBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), startTimeoutMs: 2000 }),
+    )
+    let calls = 0
+    await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    })
+    expect(supervisor.current).toBe('started')
+    supervisor.stop()
+    expect(supervisor.current).toBe('exited')
+    expect(supervisor.managed).toBe(false)
+  })
+
+  it('keeps owning the daemon after a restart', async () => {
+    // `restart()` stops the old daemon and starts a new one. Stopping flips the
+    // state to `exited`, so the restart must flip it back: otherwise the
+    // supervisor disowns the daemon it just started, the dashboard reports
+    // `exited` while a daemon is running, and the next policy reload is refused
+    // as if the daemon belonged to someone else.
+    const dir = await scratch()
+    await sleepingBinary(dir)
+    const supervisor = new DaemonSupervisor(
+      options({ binary: join(dir, DAEMON_BINARY_NAME), startTimeoutMs: 2000 }),
+    )
+    let calls = 0
+    await supervisor.ensure(async () => {
+      calls += 1
+      return calls > 1
+    })
+    expect(supervisor.restart()).toBeTypeOf('number')
+    expect(supervisor.current).toBe('started')
+    expect(supervisor.managed).toBe(true)
+    supervisor.stop()
+  })
+
+  it('refuses to restart when no daemon is running', () => {
+    expect(new DaemonSupervisor(options()).restart()).toBeUndefined()
   })
 })

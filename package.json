@@ -50,6 +50,7 @@
   "types": "./lib/index.d.ts",
   "files": [
     "lib",
+    "vendor",
     "cordis.patch.yml",
     "policy",
     "README.md",
@@ -78,6 +79,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "vendor": "node scripts/vendor-agentjail.mjs",
+    "vendor:all": "node scripts/vendor-agentjail.mjs --all",
+    "vendor:check": "node scripts/vendor-agentjail.mjs --check",
     "version-packages": "changeset version",
     "release": "changeset publish",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",

@@ -39,14 +39,22 @@ export interface DaemonConfig {
    * Start an AgentJail daemon when none is answering.
    *
    * A daemon that is already running — started by systemd, launchd, or the
-   * official installer — is never touched. This only fills the gap where a
-   * machine has AgentJail installed but nothing has started it yet.
+   * official installer — is never touched. This only fills the gap where no
+   * daemon answers at the configured socket.
    */
   supervise: boolean
   /** Explicit `agentjail` binary path. Empty falls back to `AGENTJAIL_BIN`, then `PATH`. */
   binary: string
   /** Arguments used to start the daemon. */
   args: string[]
+  /** Directory holding plugin-managed daemon state. Empty uses the per-user default. */
+  stateDir: string
+  /**
+   * Refuse to start an `agentjail` binary whose version is outside the window
+   * this plugin release was verified against. On by default: a build the plugin
+   * has not been tested with is exactly the case that breaks silently.
+   */
+  requireSupportedVersion: boolean
   /** How long to wait for a started daemon to answer, in milliseconds. */
   startTimeoutMs: number
   /** Delay between readiness probes while waiting for a started daemon. */
@@ -323,6 +331,16 @@ export const Config: Schema<Config> = Schema.object({
     args: Schema.array(Schema.string())
       .default(['daemon'])
       .description('Arguments used to start the daemon.'),
+    stateDir: Schema.string()
+      .default('')
+      .description(
+        'Directory holding the plugin-managed daemon state; empty uses the per-user default.',
+      ),
+    requireSupportedVersion: Schema.boolean()
+      .default(true)
+      .description(
+        'Refuse to start an agentjail binary whose version is outside the supported window.',
+      ),
     startTimeoutMs: Schema.number()
       .default(10000)
       .min(100)

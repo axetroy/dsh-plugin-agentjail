@@ -474,7 +474,18 @@ describe('governance and approval wiring', () => {
 })
 
 describe('policy reload', () => {
-  it('asks the daemon to reload and drops cached verdicts', async () => {
+  it('refuses to reload a daemon it does not manage', async () => {
+    const { root } = await harness({}, { action: 'allow', rule_id: 'read-only/read' })
+    // The fake daemon answers at the configured socket, so the plugin adopts it
+    // rather than starting one. Reload is served on a separate control socket
+    // that belongs to whoever started the daemon, so the plugin reports that it
+    // cannot reload instead of guessing which daemon to signal.
+    const result = await root.agentjail?.reloadPolicy()
+    expect(result?.ok).toBe(false)
+    expect(result?.error).toContain('only for a daemon this plugin started')
+  })
+
+  it('keeps cached verdicts when a reload did not happen', async () => {
     const { root, daemon } = await harness(
       { cache: { enabled: true, ttlMs: 60_000 } },
       { action: 'allow', rule_id: 'read-only/read' },
@@ -484,18 +495,11 @@ describe('policy reload', () => {
     expect(daemon.policyRequests).toHaveLength(1)
 
     const result = await root.agentjail?.reloadPolicy()
-    expect(result?.ok).toBe(true)
-    expect(daemon.requests.some((request) => request.frame['op'] === 'reload')).toBe(true)
+    expect(result?.ok).toBe(false)
 
-    // The cache was dropped with the reload, so the next call re-consults policy.
+    // Dropping the cache without reloading policy would only cost a re-consult
+    // with no new rules to see, so a failed reload leaves the cache alone.
     await callTool(root, 'bash', { command: 'ls' })
-    expect(daemon.policyRequests).toHaveLength(2)
-  })
-
-  it('reports a rejected reload without throwing', async () => {
-    const { root, daemon } = await harness({}, { action: 'allow', rule_id: 'read-only/read' })
-    daemon.control({ kind: 'json', body: { ok: false, error: 'reload failed' } })
-    const result = await root.agentjail?.reloadPolicy()
-    expect(result).toEqual({ ok: false, error: 'reload failed' })
+    expect(daemon.policyRequests).toHaveLength(1)
   })
 })

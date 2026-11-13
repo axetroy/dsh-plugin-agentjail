@@ -100,6 +100,55 @@ jobs:
       - name: Check the bundle declares a patch that exists
         run: node scripts/check-bundle.mjs
 
+  # The self-contained claim is the one this project makes most loudly, so it is
+  # tested against the real upstream binary rather than a stand-in. This job
+  # vendors the pinned build, checks its checksum, and drives a real policy
+  # evaluation and a real control-plane reload through it.
+  vendored:
+    name: vendored daemon (real binary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Vendor the pinned AgentJail build
+        run: npm run vendor
+
+      - name: Verify the vendored build is present
+        run: npm run vendor:check
+
+      - name: Run the real-daemon end-to-end tests
+        run: npm run build && AGENTJAIL_E2E=1 npx vitest run tests/integration/real-daemon.test.ts
+
+      - name: Check the vendored build ships in the package
+        run: |
+          # `npm pack` runs `prepare`, whose build output shares stdout with the
+          # JSON, so the report is parsed out of the file rather than read whole.
+          npm pack --dry-run --json --ignore-scripts > "$RUNNER_TEMP/pack.txt"
+          node -e "
+            const { readFileSync } = require('node:fs')
+            const raw = readFileSync(process.env.RUNNER_TEMP + '/pack.txt', 'utf8')
+            const start = raw.indexOf('[')
+            const [entry] = JSON.parse(raw.slice(start))
+            const vendored = entry.files.filter((f) => f.path.startsWith('vendor/'))
+            if (vendored.length === 0) throw new Error('the package does not include the vendored build')
+            // Both binaries must ship: the CLI refuses to run `install` without
+            // agentjail-hook next to agentjail, and a count-only check would not
+            // notice it going missing.
+            for (const name of ['agentjail', 'agentjail-hook']) {
+              if (!vendored.some((f) => f.path.endsWith('/' + name))) {
+                throw new Error('the package is missing the vendored ' + name)
+              }
+            }
+            console.log('package includes', vendored.length, 'vendored files')
+          "
+
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

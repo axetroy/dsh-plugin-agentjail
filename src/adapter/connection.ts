@@ -31,6 +31,7 @@ import {
 } from './protocol.js'
 import {
   DaemonUnavailableError,
+  describeUnknown,
   PolicyTimeoutError,
   ProtocolError,
   RequestTooLargeError,
@@ -356,16 +357,6 @@ function toUnavailable(error: unknown): Error {
   }
   if (error instanceof Error) return new DaemonUnavailableError(error.message, { cause: error })
   return new DaemonUnavailableError(describeUnknown(error), { cause: error })
-}
-
-/** Describe an arbitrary thrown value without relying on default stringification. */
-function describeUnknown(value: unknown): string {
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value) ?? 'unknown transport failure'
-  } catch {
-    return 'unknown transport failure'
-  }
 }
 
 /** Build the canonical abort error for a cancelled wait. */

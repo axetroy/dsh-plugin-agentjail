@@ -1,0 +1,27 @@
+{
+  "$comment": "Pinned AgentJail build vendored by this plugin. `scripts/vendor-agentjail.mjs` fetches the archive for the current platform and verifies it against `sha256` before unpacking. Updating this file is how the plugin moves to a new upstream build, and it is deliberately a reviewed change rather than an automatic one.",
+  "version": "v1.8.2",
+  "releaseBaseUrl": "https://github.com/LuD1161/agentjail/releases/download",
+  "supportedWindow": {
+    "min": "1.8.0",
+    "maxMajor": 2
+  },
+  "targets": {
+    "linux-amd64": {
+      "asset": "agentjail-v1.8.2-linux-amd64.tar.gz",
+      "sha256": "fc78b78731e1e6b196aad3a23c56c2baa4d4a2f1505e7c488d56d5b791fe9b50"
+    },
+    "linux-arm64": {
+      "asset": "agentjail-v1.8.2-linux-arm64.tar.gz",
+      "sha256": "cd80628baf99de0b455754e97cdb5ac808c346e284a550e6079c9e46c21f144f"
+    },
+    "darwin-amd64": {
+      "asset": "agentjail-v1.8.2-darwin-amd64.tar.gz",
+      "sha256": "a3c393990181d2835159d80c9c4f3ff0b97a46839570cd79271b2fcffef9a7a2"
+    },
+    "darwin-arm64": {
+      "asset": "agentjail-v1.8.2-darwin-arm64.tar.gz",
+      "sha256": "2b7688a0a97105474178fa23f00a1f5f1bd1238d2146afcd1e131d965726069c"
+    }
+  }
+}

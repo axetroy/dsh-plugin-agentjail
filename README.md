@@ -57,31 +57,55 @@ configuration layer.
 #    @deepseek-ai/dsh-base as its first bundle.
 dsh plugin --profile secure add dsh-plugin-agentjail
 
-# 2. If agentjail is on your PATH, the plugin starts the daemon for you.
+# 2. Start the harness. The plugin starts the AgentJail daemon it ships.
 dsh --profile secure
 ```
 
+Nothing else is needed. The published package carries the AgentJail build the
+plugin was tested against, so installing the plugin installs the engine.
+
 ### Do I need to install AgentJail separately?
 
-Only once, and only the binary. The plugin supervises the daemon, so there is no
-separate "start the daemon" step:
+No. That is the point of vendoring: the plugin and the engine version move
+together, so an upstream release cannot change the binary underneath a plugin
+that was not tested against it.
 
-- **A daemon is already running.** The plugin uses it and touches nothing. A
+The plugin resolves a binary in this order and takes the first that works:
+
+| Order | Source             | When it is used                                            |
+| ----- | ------------------ | ---------------------------------------------------------- |
+| 1     | `daemon.binary`    | An explicit path. Always wins, for pinning your own build. |
+| 2     | `AGENTJAIL_BIN`    | An explicit path in the environment.                       |
+| 3     | **Vendored build** | The build shipped inside the package. The default.         |
+| 4     | `PATH`             | An `agentjail` you installed yourself.                     |
+| 5     | Managed download   | Only with `daemon.managedInstall: true`.                   |
+
+Before it starts anything, the plugin runs `<binary> --no-color version` and
+refuses a build outside its supported window (`>=1.8.0 <2.0.0`). A refused binary
+leaves the plugin denying protected calls rather than running an engine it does
+not understand. The window is fixed for a given plugin release; set
+`daemon.requireSupportedVersion: false` to skip the check entirely.
+
+A daemon is used, started, or left alone as follows:
+
+- **A daemon is already answering.** The plugin uses it and touches nothing. A
   daemon you started through systemd, launchd, or `agentjail install` keeps its
   own lifecycle. Set `daemon.supervise: false` to opt out of supervision
   entirely.
-- **`agentjail` is on your PATH but nothing is running.** The plugin starts
-  `agentjail daemon` and stops it again when the plugin unloads.
-- **Nothing is installed.** Point `daemon.binary` at a binary, or set
-  `daemon.managedInstall: true` and the plugin downloads a release binary into
-  `~/.agentjail/dsh-plugin-agentjail/bin` on first load. The download verifies
-  the release's published SHA-256 before extracting anything.
+- **No daemon is answering.** The plugin starts the resolved binary as
+  `agentjail daemon`, on a private socket under its own state directory, and
+  stops it again when the plugin unloads. It passes `--socket`, `--db`, and
+  `--log` explicitly, because the daemon does not read `AGENTJAIL_SOCKET`, and it
+  gives the daemon a private `HOME` so the daemon cannot reach a stale control
+  plane left by an unrelated install.
+- **`daemon.binary` points at a binary.** That binary is used and the vendored
+  build is ignored.
 
 `docs/INSTALL.md` covers each case, the search order, and the residual trust
 question in the managed download.
 
 ```sh
-# Install the daemon yourself, once, if you prefer to own it.
+# Optional: own the daemon yourself instead of letting the plugin manage it.
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
@@ -114,7 +138,8 @@ tools.
 
 - Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
-- An AgentJail binary (on `PATH`, configured, or downloaded by the plugin)
+- Nothing else. The AgentJail engine ships with the plugin; override it with
+  `daemon.binary` only if you want to.
 
 ## Configure
 
