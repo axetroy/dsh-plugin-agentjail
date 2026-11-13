@@ -3,6 +3,11 @@
 # This module is the daemon-facing entrypoint. It merges the rule sets of every
 # installed template and resolves them into one verdict, in a fixed order:
 # a matching deny wins over a matching ask, and both win over the default allow.
+#
+# A bare "allow" with no rule_id is the engine reporting "no rule matched". The
+# plugin reads that as a distinct outcome and applies its own configured
+# defaultAction, so this module must not encode a deployment's default posture:
+# a rule author cannot see the plugin's configuration.
 
 package agentjail.dsh
 
@@ -99,6 +104,15 @@ decision := {"action": "ask", "rule_id": id, "reason": reason} if {
   some rule in ask_rules
   rule.rule_id == id
   reason := rule.reason
+}
+
+# A call no rule matched is allowed explicitly, naming the rule that says so.
+# The explicit id matters: the plugin treats a bare allow with no rule behind it
+# as "no policy answered" and applies its own defaultAction, so without this the
+# denylist templates below would be read as a deny-everything policy.
+decision := {"action": "allow", "rule_id": "default/allow", "reason": "no deny or ask rule matched"} if {
+  not first_deny_id
+  not first_ask_id
 }
 
 # The flat action field is what the daemon reports when it only needs the verb.

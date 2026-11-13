@@ -118,7 +118,9 @@ function resultText(result: Awaited<ReturnType<Context['tools']['execute']>>): s
 
 describe('plugin mounted on the real Harness pipeline', () => {
   it('allows a permitted call and runs its body', async () => {
-    const { root, executed } = await harness({}, { action: 'allow' })
+    // A rule-backed allow: the engine names the rule that permitted the call, so
+    // the verdict is the engine's rather than the configured default.
+    const { root, executed } = await harness({}, { action: 'allow', rule_id: 'read-only/read' })
     const result = await callTool(root, 'bash', { command: 'ls' })
     expect(executed).toEqual(['ls'])
     expect(resultText(result)).toContain('ran: ls')
@@ -287,9 +289,19 @@ describe('plugin mounted on the real Harness pipeline', () => {
     expect(record?.monitorOnly).toBe(true)
   })
 
-  it('honours the default action when the daemon omits a reason', async () => {
-    const { root } = await harness({}, { action: 'allow' })
+  it('fails closed when the engine matches no rule', async () => {
+    // A bare allow with no rule_id is the engine reporting "no rule matched".
+    // The configured defaultAction governs that case, and it is `deny`.
+    const { root, executed } = await harness({}, { action: 'allow' })
     const result = await callTool(root, 'bash', { command: 'ls' })
+    expect(executed).toEqual([])
+    expect(resultText(result)).toContain('matched no rule')
+  })
+
+  it('honours an explicit allow default action', async () => {
+    const { root, executed } = await harness({ defaultAction: 'allow' }, { action: 'allow' })
+    const result = await callTool(root, 'bash', { command: 'ls' })
+    expect(executed).toEqual(['ls'])
     expect(resultText(result)).toContain('ran: ls')
   })
 
@@ -403,5 +415,87 @@ describe('approval integration', () => {
     }
     await root.agentjail?.approval.answer(event, async () => 'allowed-once')
     expect(root.agentjail?.grants.list()).toHaveLength(0)
+  })
+})
+
+describe('governance and approval wiring', () => {
+  it('surfaces a deny-rate alert to the alert sink', async () => {
+    const { root } = await harness(
+      { governance: { denyRateAlertThreshold: 0.5, denyRateAlertMinSamples: 1 } },
+      { action: 'deny', rule_id: 'r1' },
+    )
+    await callTool(root, 'bash', { command: 'ls' })
+    const kinds = root.agentjail?.alerts().map((alert) => alert.kind) ?? []
+    expect(kinds).toContain('deny-rate')
+  })
+
+  it('silences every alert when alerts are disabled', async () => {
+    const { root } = await harness(
+      { governance: { alertsEnabled: false } },
+      { action: 'deny', rule_id: 'r1' },
+    )
+    await callTool(root, 'bash', { command: 'ls' })
+    expect(root.agentjail?.alerts()).toEqual([])
+  })
+
+  it('fails an ask closed when askFallback is deny', async () => {
+    const { root, executed } = await harness(
+      { askFallback: 'deny' },
+      { action: 'ask', reason: 'review' },
+    )
+    const result = await callTool(root, 'bash', { command: 'ls' })
+    expect(executed).toEqual([])
+    expect(resultText(result)).toContain('askFallback')
+  })
+
+  it('issues and honours a session grant without consulting the engine', async () => {
+    const { root, daemon, executed } = await harness(
+      { cache: { enabled: false } },
+      { action: 'deny', rule_id: 'r1' },
+    )
+    await callTool(root, 'bash', { command: 'ls' })
+    expect(executed).toEqual([])
+
+    const record = root.agentjail?.queryAudit()[0]
+    const requestsBefore = daemon.policyRequests.length
+    const grant = root.agentjail?.grantSession({
+      toolName: 'bash',
+      sessionId: record?.sessionId ?? '',
+      digest: record?.digest ?? '',
+    })
+    expect(grant?.scope).toBe('session')
+
+    const result = await callTool(root, 'bash', { command: 'ls' })
+    expect(executed).toEqual(['ls'])
+    expect(resultText(result)).toContain('ran: ls')
+    // The grant satisfied the call, so no further policy request was made.
+    expect(daemon.policyRequests).toHaveLength(requestsBefore)
+  })
+})
+
+describe('policy reload', () => {
+  it('asks the daemon to reload and drops cached verdicts', async () => {
+    const { root, daemon } = await harness(
+      { cache: { enabled: true, ttlMs: 60_000 } },
+      { action: 'allow', rule_id: 'read-only/read' },
+    )
+    await callTool(root, 'bash', { command: 'ls' })
+    await callTool(root, 'bash', { command: 'ls' })
+    expect(daemon.policyRequests).toHaveLength(1)
+
+    const result = await root.agentjail?.reloadPolicy()
+    expect(result?.ok).toBe(true)
+    expect(daemon.requests.some((request) => request.frame['op'] === 'reload')).toBe(true)
+
+    // The cache was dropped with the reload, so the next call re-consults policy.
+    await callTool(root, 'bash', { command: 'ls' })
+    expect(daemon.policyRequests).toHaveLength(2)
+  })
+
+  it('reports a rejected reload without throwing', async () => {
+    const { root, daemon } = await harness({}, { action: 'allow', rule_id: 'read-only/read' })
+    daemon.control({ kind: 'json', body: { ok: false, error: 'reload failed' } })
+    const result = await root.agentjail?.reloadPolicy()
+    expect(result).toEqual({ ok: false, error: 'reload failed' })
   })
 })

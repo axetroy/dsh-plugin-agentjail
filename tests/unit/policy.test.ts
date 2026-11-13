@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  DEFAULT_ALLOW_RULE_ID,
   ENTRYPOINT_FILE,
   POLICY_PACKAGE,
   POLICY_TEMPLATES,
@@ -55,6 +56,25 @@ function evaluateAction(directory: string, input: Record<string, unknown>): stri
     result: Array<{ expressions: Array<{ value: string }> }>
   }
   return parsed.result[0]?.expressions[0]?.value ?? 'MISSING'
+}
+
+/** Evaluate one policy input and return the full decision document. */
+function evaluateDecision(
+  directory: string,
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const output = execFileSync(
+    opa as string,
+    ['eval', '-d', directory, '-I', 'data.agentjail.dsh.decision'],
+    {
+      input: JSON.stringify(input),
+      encoding: 'utf8',
+    },
+  )
+  const parsed = JSON.parse(output) as {
+    result: Array<{ expressions: Array<{ value: Record<string, unknown> | undefined }> }>
+  }
+  return parsed.result[0]?.expressions[0]?.value ?? {}
 }
 
 /** Write a bundle for the named templates into a fresh temporary directory. */
@@ -125,8 +145,10 @@ describe('renderEntrypoint', () => {
     expect(entrypoint).toContain(`import data.${TEMPLATE_PACKAGE_PREFIX}.mcp_allowlist`)
   })
 
-  it('defaults to allow when no template matches', () => {
-    expect(renderEntrypoint([])).toContain('default action := "allow"')
+  it('names the rule behind a no-match allow, so the plugin can tell it apart', () => {
+    // A bare allow with no rule id means "no policy answered" and falls to the
+    // plugin's defaultAction, so the generated default must carry an id.
+    expect(renderEntrypoint([])).toContain(`"rule_id": "${DEFAULT_ALLOW_RULE_ID}"`)
   })
 
   it('resolves deny before ask', () => {
@@ -357,6 +379,19 @@ describe.skipIf(opa === undefined)('generated Rego evaluated by a real OPA binar
     const decision = parsed.result[0]?.expressions[0]?.value
     expect(decision?.action).toBe('deny')
     expect(decision?.rule_id).toBe('no-credential-access/credential-access')
+  })
+
+  it('names the rule behind a no-match allow, so the plugin can tell it apart', async () => {
+    // The plugin reads a bare allow with no rule id as "no policy answered" and
+    // applies its defaultAction, so a permitted call must name the rule behind it.
+    const directory = await bundle(['no-credential-access'])
+    const decision = evaluateDecision(directory, {
+      tool_name: 'Read',
+      tool_input: { file_path: '/home/u/project/README.md' },
+      cwd: '/home/u/project',
+    })
+    expect(decision['action']).toBe('allow')
+    expect(decision['rule_id']).toBe(DEFAULT_ALLOW_RULE_ID)
   })
 
   it('denies every mutation under the read-only baseline', async () => {

@@ -64,6 +64,17 @@ export const TEMPLATE_PACKAGE_PREFIX = `${POLICY_PACKAGE}.templates`
 export const ENTRYPOINT_FILE = '99-decision.rego'
 
 /**
+ * Rule id the generated entrypoint attaches to the allow it synthesizes when no
+ * rule matched.
+ *
+ * It is not a template rule. It exists so a no-match allow is distinguishable
+ * from a bare allow carrying no rule at all: the plugin treats the latter as "no
+ * policy answered" and applies its configured `defaultAction`, while this id
+ * means the shipped policy deliberately permits the call.
+ */
+export const DEFAULT_ALLOW_RULE_ID = 'default/allow'
+
+/**
  * Convert a template name into a Rego package path segment.
  * @param name - the template name.
  * @returns the package path segment.
@@ -144,6 +155,11 @@ export function renderEntrypoint(templates: readonly PolicyTemplate[]): string {
 # This module is the daemon-facing entrypoint. It merges the rule sets of every
 # installed template and resolves them into one verdict, in a fixed order:
 # a matching deny wins over a matching ask, and both win over the default allow.
+#
+# A bare "allow" with no rule_id is the engine reporting "no rule matched". The
+# plugin reads that as a distinct outcome and applies its own configured
+# defaultAction, so this module must not encode a deployment's default posture:
+# a rule author cannot see the plugin's configuration.
 
 package ${POLICY_PACKAGE}
 
@@ -191,6 +207,15 @@ decision := {"action": "ask", "rule_id": id, "reason": reason} if {
   some rule in ask_rules
   rule.rule_id == id
   reason := rule.reason
+}
+
+# A call no rule matched is allowed explicitly, naming the rule that says so.
+# The explicit id matters: the plugin treats a bare allow with no rule behind it
+# as "no policy answered" and applies its own defaultAction, so without this the
+# denylist templates below would be read as a deny-everything policy.
+decision := {"action": "allow", "rule_id": "${DEFAULT_ALLOW_RULE_ID}", "reason": "no deny or ask rule matched"} if {
+  not first_deny_id
+  not first_ask_id
 }
 
 # The flat action field is what the daemon reports when it only needs the verb.

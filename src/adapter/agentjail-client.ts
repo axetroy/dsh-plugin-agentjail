@@ -19,7 +19,7 @@ import {
   type NormalizedRequest,
 } from '../security/normalizer.js'
 import { argumentDigest, createRequestId, toWireId } from '../utils/request-id.js'
-import type { PolicyDecision, PolicyRequestFrame } from './protocol.js'
+import type { ControlResult, PolicyDecision, PolicyRequestFrame } from './protocol.js'
 import { DaemonUnavailableError, PolicyAbortedError, toAgentJailError } from '../utils/errors.js'
 import type { AgentJailError } from '../utils/errors.js'
 
@@ -342,6 +342,20 @@ export class AgentJailClient {
    */
   invalidate(): void {
     this.cache.clear()
+  }
+
+  /**
+   * Ask the daemon to reload its policy, then drop cached verdicts.
+   *
+   * Cache invalidation is folded in because the two must not be separable: a
+   * verdict cached under the old policy would otherwise outlive the reload.
+   * @param signal - caller cancellation.
+   * @returns the control result; `ok` is false when the daemon rejected the reload.
+   */
+  async reloadPolicy(signal?: AbortSignal): Promise<ControlResult> {
+    const result = await this.connection.reload(signal)
+    if (result.ok) this.invalidate()
+    return result
   }
 
   /** Number of cached verdicts. */

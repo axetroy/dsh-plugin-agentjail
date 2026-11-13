@@ -244,8 +244,10 @@ ctx.agentjail.queryAudit({ verdict: 'deny', limit: 50 })
 ctx.agentjail.reportText() // a readable security report
 ctx.agentjail.listGrants() // outstanding approvals
 ctx.agentjail.revokeSession(sessionId) // drop a session's approvals
+ctx.agentjail.grantSession({ toolName, sessionId, digest }) // authorize a repeat call
 ctx.agentjail.writePolicyTemplates() // render configured templates to disk
-ctx.agentjail.invalidateCache() // after a policy reload
+ctx.agentjail.reloadPolicy() // ask the daemon to reload, then drop cached verdicts
+ctx.agentjail.invalidateCache() // drop cached verdicts only
 ctx.agentjail.dashboard() // the dashboard payload, as JSON-ready data
 ctx.agentjail.dashboardText() // the dashboard as fixed-width text
 ctx.agentjail.supervision() // 'external' | 'started' | 'exited' | 'unavailable' | 'disabled'

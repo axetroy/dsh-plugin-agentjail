@@ -108,6 +108,23 @@ export interface AgentJailService {
    */
   revokeSession(sessionId: string): number
   /**
+   * Issue a session grant for one call identity.
+   *
+   * A session grant authorizes repeat calls of the same session, tool, and
+   * argument digest until `approval.sessionGrantTtlMs` elapses, which is what a
+   * workflow that legitimately repeats one command needs. It is issued through
+   * this API rather than from an approval prompt so an operator opts in
+   * deliberately; the approval answerer itself only ever issues one-time grants.
+   * @param input - the call identity to authorize.
+   * @returns the issued grant, or `undefined` when grants are disabled.
+   */
+  grantSession(input: {
+    toolName: string
+    sessionId: string
+    digest: string
+    reason?: string
+  }): Grant | undefined
+  /**
    * Build a security report.
    * @returns the assembled report.
    */
@@ -126,6 +143,11 @@ export interface AgentJailService {
    * Drop cached verdicts, e.g. after a policy reload.
    */
   invalidateCache(): void
+  /**
+   * Ask the daemon to reload its policy and drop cached verdicts.
+   * @returns the daemon's control result; `ok` is false when it rejected the reload.
+   */
+  reloadPolicy(): Promise<{ ok: boolean; error?: string; version?: string }>
   /** Alerts observed since plugin load, newest last. */
   alerts(): DecisionAlert[]
   /** What the plugin is currently relying on for policy. */
@@ -192,6 +214,10 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
   const logger = ctx.logger
   const alerts: DecisionAlert[] = []
   const emitAlert = (alert: DecisionAlert): void => {
+    // `governance.alertsEnabled` gates the whole alert surface. Enforcement and
+    // the audit trail are unaffected: turning alerts off silences a signal, it
+    // never widens or narrows a verdict.
+    if (!config.governance.alertsEnabled) return
     alerts.push(alert)
     while (alerts.length > 200) alerts.shift()
     logger?.info?.('agentjail alert [%s] %s: %s', alert.kind, alert.toolName, alert.message)
@@ -344,6 +370,44 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     listGrants: () => grants.list(),
     revokeGrant: (id) => grants.revoke(id),
     revokeSession: (sessionId) => grants.revokeSession(sessionId),
+    grantSession: (input) => {
+      if (!config.approval.grantsEnabled) return undefined
+      const grant = grants.issue({
+        scope: 'session',
+        toolName: input.toolName,
+        sessionId: input.sessionId,
+        digest: input.digest,
+        ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      })
+      void audit
+        .record({
+          requestId: grant.id,
+          sessionId: input.sessionId,
+          agentId: input.sessionId,
+          toolName: input.toolName,
+          jailToolName: input.toolName,
+          cwd: config.policyContext.attributes['cwd'] ?? process.cwd(),
+          verdict: 'allow',
+          source: 'grant',
+          arguments: {},
+          digest: input.digest,
+          durationMs: 0,
+          reason: `session grant issued for "${input.toolName}"`,
+          grantId: grant.id,
+        })
+        .catch((error: unknown) =>
+          logger?.warn?.(
+            'agentjail: failed to record a session grant: %s',
+            error instanceof Error ? error.message : String(error),
+          ),
+        )
+      logger?.info?.(
+        'agentjail: session grant issued for "%s" in session "%s"',
+        input.toolName,
+        input.sessionId,
+      )
+      return grant
+    },
     report: () =>
       buildReport({
         options: {
@@ -383,6 +447,13 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
       return writeTemplateBundle(directory, templates)
     },
     invalidateCache: () => client.invalidate(),
+    reloadPolicy: async () => {
+      try {
+        return await client.reloadPolicy()
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
     alerts: () => [...alerts],
     supervision: () => supervisor.current,
     ensureDaemon: async () => {

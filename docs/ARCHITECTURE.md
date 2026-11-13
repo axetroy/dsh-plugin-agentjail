@@ -67,8 +67,8 @@ without a runtime and the runtime be tested without a daemon.
       and argument digest allows the call and is consumed.
    4. **Engine.** The call is normalized into AgentJail's vocabulary and
       evaluated. `source` is `engine`, or `cache` when a cached verdict was used.
-   5. **Default action.** Applies when the engine returns a decision with no
-      rule. Its default is `deny`.
+   5. **Default action.** Applies when the engine matched no rule, which it reports
+      as an `allow` carrying no `rule_id`. Its default is `deny`.
    6. **Failure action.** Applies when no trusted answer exists at all - an
       unreachable daemon, a timeout, a malformed frame, a caller abort. Its
       default is `deny`.

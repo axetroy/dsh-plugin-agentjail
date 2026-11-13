@@ -26,7 +26,12 @@ import type { AgentJailClient } from '../adapter/agentjail-client.js'
 import type { GrantStore } from '../security/grants.js'
 import type { AuditLog, AuditVerdict, DecisionSource } from '../audit/audit-log.js'
 import type { MetricsCollector } from '../governance/metrics.js'
-import { resolveDecision, type DecisionAlert, type ResolvedDecision } from '../security/decision.js'
+import {
+  resolveDecision,
+  isEnforcing,
+  type DecisionAlert,
+  type ResolvedDecision,
+} from '../security/decision.js'
 import { createRequestId, toWireId, argumentDigest } from '../utils/request-id.js'
 import { toAgentJailError } from '../utils/errors.js'
 import type { AgentJailError } from '../utils/errors.js'
@@ -141,7 +146,10 @@ export function createPreToolUseGate(ctx: Context, options: PreToolUseGateOption
         : {}),
       ...(monitorOnly ? { monitorOnly: true } : {}),
     })
-    options.metrics.observe({
+    // The collector raises a deny-rate alert when the window crosses the
+    // threshold. Dropping that value would make the alert unreachable, so it is
+    // forwarded to the same sink every other alert uses.
+    const riskAlert = options.metrics.observe({
       at: Date.now(),
       verdict: resolved.verdict,
       source: resolved.source,
@@ -149,6 +157,14 @@ export function createPreToolUseGate(ctx: Context, options: PreToolUseGateOption
       sessionId: identity.sessionId,
       durationMs,
     })
+    if (riskAlert !== undefined) {
+      options.onAlert?.({
+        kind: 'deny-rate',
+        toolName: exec.name,
+        sessionId: identity.sessionId,
+        message: riskAlert.message,
+      })
+    }
   }
 
   return {
@@ -178,7 +194,7 @@ export function createPreToolUseGate(ctx: Context, options: PreToolUseGateOption
         resolved = failureResolution(toAgentJailError(error), config)
       }
 
-      const monitorOnly = config.enforcement === 'monitor'
+      const monitorOnly = !isEnforcing(config)
       try {
         await record(exec, identity, resolved, digest, Date.now() - startedAt, monitorOnly)
       } catch (error) {

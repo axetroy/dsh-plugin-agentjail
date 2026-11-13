@@ -44,9 +44,10 @@ The daemon reads one document: `data.agentjail.dsh.decision`. It has this shape:
 model and written to the audit record, so both should be readable by a person who
 did not write the rule.
 
-A decision with no matching rule falls to the plugin's `defaultAction`. A
-transport failure falls to `failureAction`. Neither is the engine's decision to
-make, which is why the engine never sees them.
+A decision that matches no rule - which the engine reports as an `allow` carrying
+no `rule_id` - falls to the plugin's `defaultAction`. A transport failure falls to
+`failureAction`. Neither is the engine's decision to make, which is why the engine
+never sees them.
 
 ## Shipped templates
 
@@ -72,6 +73,14 @@ node -e "
 
 The checked-in [`policy/`](../policy) directory is the rendered bundle for all
 six. A test regenerates it and fails if the two drift.
+
+The templates are denylists: a call no rule names is permitted. The generated
+entrypoint therefore answers a no-match with an explicit
+`{"action": "allow", "rule_id": "default/allow"}` rather than a bare `allow`. That
+id is what tells the plugin the policy deliberately permitted the call, so the
+no-match default and `defaultAction` stay distinguishable. A hand-written policy
+that returns a bare `allow` with no `rule_id` is read as "no rule answered", and
+`defaultAction` applies to it.
 
 ### How the templates compose
 

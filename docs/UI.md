@@ -114,16 +114,20 @@ ctx.agentjail.queryAudit({ verdict: 'deny', limit: 50 })
 ctx.agentjail.listGrants() // outstanding approvals
 ctx.agentjail.revokeGrant(id) // revoke one approval
 ctx.agentjail.revokeSession(sessionId) // revoke a session's approvals
+ctx.agentjail.grantSession({ toolName, sessionId, digest }) // authorize a repeat call
 ctx.agentjail.reportText() // a readable security report
 ctx.agentjail.dashboard() // the dashboard payload, JSON-ready
 ctx.agentjail.dashboardText() // the dashboard as fixed-width text
 ctx.agentjail.supervision() // the current supervision state
 ctx.agentjail.ensureDaemon() // start a daemon if none is answering
 ctx.agentjail.alerts() // alerts raised since load
-ctx.agentjail.invalidateCache() // drop cached verdicts after a policy reload
+ctx.agentjail.reloadPolicy() // ask the daemon to reload, then drop cached verdicts
+ctx.agentjail.invalidateCache() // drop cached verdicts only
 ```
 
-`revokeGrant` and `revokeSession` remove an authorization. They cannot add one.
+`revokeGrant` and `revokeSession` remove an authorization. `grantSession` is the
+only call that adds one, and it is deliberate: the approval answerer issues
+one-time grants, so a session grant exists only because an operator asked for it.
 
 ## Configuring the surface
 

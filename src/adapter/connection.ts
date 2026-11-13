@@ -17,6 +17,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   CONTROL_OP_PING,
+  CONTROL_OP_RELOAD,
   CONTROL_TYPE,
   LineDecoder,
   decodeFrame,
@@ -98,8 +99,34 @@ export class AgentJailConnection {
    * @returns the validated policy decision.
    */
   async evaluate(frame: PolicyRequestFrame, signal?: AbortSignal): Promise<PolicyDecision> {
+    await this.waitBackoff(signal)
     const raw = await this.request(frame, signal)
     return toPolicyDecision(raw)
+  }
+
+  /**
+   * Wait out the reconnect backoff before a policy request.
+   *
+   * Only the policy path waits. A control ping is the readiness probe, and a
+   * probe that slept through the backoff would turn a daemon that is still
+   * starting into an unavailable one, so the supervisor's own poll interval
+   * governs that path instead.
+   * @param signal - caller cancellation.
+   */
+  private async waitBackoff(signal?: AbortSignal): Promise<void> {
+    const delay = this.backoffMs()
+    if (delay <= 0) return
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        clearTimeout(timer)
+        reject(toAbortError(signal))
+      }
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, delay)
+      signal?.addEventListener('abort', onAbort, { once: true })
+    })
   }
 
   /**
@@ -109,6 +136,22 @@ export class AgentJailConnection {
    */
   async ping(signal?: AbortSignal): Promise<ControlResult> {
     const frame: ControlRequest = { type: CONTROL_TYPE, op: CONTROL_OP_PING }
+    const raw = await this.request(frame, signal)
+    return toControlResult(raw)
+  }
+
+  /**
+   * Ask the daemon to reload `policy.yaml` and its Rego bundle in place.
+   *
+   * The reload is the daemon's, not the plugin's: the plugin only asks for it, so
+   * a policy edit still has exactly one evaluator and one audit trail. The caller
+   * is responsible for dropping cached verdicts afterwards, since a verdict cached
+   * under the old policy is no longer trustworthy.
+   * @param signal - caller cancellation.
+   * @returns the control result; `ok` is false when the daemon rejected the reload.
+   */
+  async reload(signal?: AbortSignal): Promise<ControlResult> {
+    const frame: ControlRequest = { type: CONTROL_TYPE, op: CONTROL_OP_RELOAD }
     const raw = await this.request(frame, signal)
     return toControlResult(raw)
   }

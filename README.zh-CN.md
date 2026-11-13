@@ -230,8 +230,10 @@ ctx.agentjail.queryAudit({ verdict: 'deny', limit: 50 })
 ctx.agentjail.reportText() // 可读的安全报告
 ctx.agentjail.listGrants() // 尚未过期的授权
 ctx.agentjail.revokeSession(sessionId) // 撤销某会话的全部授权
+ctx.agentjail.grantSession({ toolName, sessionId, digest }) // 授权重复调用
 ctx.agentjail.writePolicyTemplates() // 把已配置的模板渲染到磁盘
-ctx.agentjail.invalidateCache() // 策略重载之后调用
+ctx.agentjail.reloadPolicy() // 让守护进程重载策略，并清空缓存判定
+ctx.agentjail.invalidateCache() // 仅清空缓存判定
 ctx.agentjail.dashboard() // 仪表盘数据，可直接序列化为 JSON
 ctx.agentjail.dashboardText() // 仪表盘的等宽文本形式
 ctx.agentjail.supervision() // 'external' | 'started' | 'exited' | 'unavailable' | 'disabled'

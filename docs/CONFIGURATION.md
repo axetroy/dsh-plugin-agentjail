@@ -78,7 +78,10 @@ where you are watching the process.
 
 `allow` | `deny` | `ask`. Default `deny`.
 
-The verdict when the engine returns a decision that names no rule and no action.
+The verdict when the engine matched no rule. A rule-backed verdict always names
+its `rule_id`, so an `allow` with no rule behind it - the engine's own default
+decision - is what this field governs. The daemon's synthesized default carries
+the id `resolver/default` and is treated the same way.
 
 Do not set this to `allow` unless your policy is written to be exhaustive, which
 is hard to prove and easy to break with an edit.
@@ -97,6 +100,11 @@ mapping step rather than depending on the approval chain.
 
 - `native` surfaces the question through the Harness approval service.
 - `deny` resolves it as a denial without prompting.
+
+An engine `ask` reaches this field only after `askAction` has mapped it, so
+`askFallback` decides what happens to the asks you chose to surface. A denial
+produced here is recorded with a reason that names `askFallback`, which keeps it
+distinguishable in the audit trail from a rule's own denial.
 
 ## Connection
 

@@ -184,6 +184,30 @@ describe('AgentJailClient over a real socket', () => {
     client.close()
   })
 
+  it('waits out the backoff before a policy call but not before a probe', async () => {
+    const path = await unusedSocketPath()
+    const client = clientFor(path, { reconnectDelayMs: 50, maxReconnectDelayMs: 50 })
+    // The first failure arms the backoff without waiting for it.
+    await client.evaluateCall(call)
+    expect(client.backoffMs()).toBe(50)
+
+    // A probe is the readiness path and must stay responsive, so it does not sleep.
+    // Comparing the two durations rather than a fixed threshold keeps the test
+    // honest on a loaded machine: the policy call cannot finish before the probe,
+    // because it waits out the backoff the probe skipped.
+    const probeStarted = Date.now()
+    await client.probe()
+    const probeElapsed = Date.now() - probeStarted
+
+    const callStarted = Date.now()
+    await client.evaluateCall(call)
+    const callElapsed = Date.now() - callStarted
+
+    expect(callElapsed).toBeGreaterThanOrEqual(45)
+    expect(probeElapsed).toBeLessThan(callElapsed)
+    client.close()
+  })
+
   it('returns a cached verdict without a second round trip', async () => {
     const daemon = new FakeDaemon()
     await daemon.listen()

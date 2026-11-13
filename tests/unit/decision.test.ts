@@ -195,9 +195,74 @@ describe('resolveDecision', () => {
 
   it('marks a cached verdict as coming from the cache', async () => {
     const { cfg, grants } = engine()
-    const client = clientReturning({ decision: { action: 'allow', raw: {} }, cached: true })
+    // A rule id is what distinguishes a real verdict from the no-match default,
+    // so a cached rule verdict is what proves the cache source is reported.
+    const client = clientReturning({
+      decision: { action: 'allow', ruleId: 'read-only/read', raw: {} },
+      cached: true,
+    })
     const resolved = await resolveDecision({ config: cfg, client, grants }, input)
     expect(resolved.source).toBe('cache')
+  })
+
+  it('applies defaultAction when the engine matches no rule', async () => {
+    const { cfg, grants } = engine({ defaultAction: 'deny' })
+    const client = clientReturning({ decision: { action: 'allow', raw: {} } })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.verdict).toBe('deny')
+    expect(resolved.source).toBe('default')
+  })
+
+  it('treats the daemon resolver default as no match', async () => {
+    const { cfg, grants } = engine({ defaultAction: 'deny' })
+    const client = clientReturning({
+      decision: { action: 'allow', ruleId: 'resolver/default', raw: {} },
+    })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.verdict).toBe('deny')
+    expect(resolved.source).toBe('default')
+  })
+
+  it('keeps an engine allow that a rule produced', async () => {
+    const { cfg, grants } = engine({ defaultAction: 'deny' })
+    const client = clientReturning({
+      decision: { action: 'allow', ruleId: 'read-only/read', raw: {} },
+    })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.verdict).toBe('allow')
+    expect(resolved.source).toBe('engine')
+  })
+
+  it('honours a fail-open default action only when explicitly configured', async () => {
+    const { cfg, grants } = engine({ defaultAction: 'allow' })
+    const client = clientReturning({ decision: { action: 'allow', raw: {} } })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.verdict).toBe('allow')
+    expect(resolved.source).toBe('default')
+  })
+
+  it('maps a no-match default through askFallback', async () => {
+    const { cfg, grants } = engine({ defaultAction: 'ask', askFallback: 'deny' })
+    const client = clientReturning({ decision: { action: 'allow', raw: {} } })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.verdict).toBe('deny')
+    expect(resolved.reason).toContain('askFallback')
+  })
+
+  it('resolves an overriding ask through askFallback too', async () => {
+    // A deployment that cannot answer prompts fails every ask closed, whether the
+    // ask came from a rule or from an override.
+    const { cfg, grants } = engine({
+      askFallback: 'deny',
+      overrides: { tools: { bash: { action: 'ask' } } },
+    })
+    const resolved = await resolveDecision(
+      { config: cfg, client: clientReturning({}), grants },
+      input,
+    )
+    expect(resolved.verdict).toBe('deny')
+    expect(resolved.source).toBe('override')
+    expect(resolved.reason).toContain('askFallback')
   })
 
   it('applies the failure action when the engine is unreachable', async () => {

@@ -8,7 +8,8 @@
  * 2. Scope overrides — agent, then session, then tool.
  * 3. Outstanding grants — a previously approved call identity.
  * 4. The AgentJail engine — the authoritative OPA/Rego verdict.
- * 5. The default action — when the engine returned no rule and no verdict.
+ * 5. The default action — when the engine matched no rule, so it returned a bare
+ *    `allow` with no `rule_id` rather than a verdict.
  * 6. The failure action — when no trusted answer was available at all.
  *
  * The order matters: an exemption is the only path that bypasses the engine, and
@@ -19,6 +20,7 @@
 
 import type { Config, ScopeOverride } from '../config/schema.js'
 import type { AgentJailClient, EvaluateOutcome } from '../adapter/agentjail-client.js'
+import type { PolicyDecision } from '../adapter/protocol.js'
 import type { GrantStore, GrantScope } from './grants.js'
 import type { AuditVerdict, DecisionSource } from '../audit/audit-log.js'
 import type { NormalizedRequest } from './normalizer.js'
@@ -143,6 +145,27 @@ export function failureVerdict(config: Config): AuditVerdict {
 }
 
 /**
+ * Resolve a plugin-level `ask` against `askFallback`.
+ *
+ * `native` keeps the ask so the Harness approval service can prompt a human;
+ * `deny` converts it to a denial here, without prompting, for a deployment that
+ * has no way to answer — a headless CI job, for example. An engine `ask` already
+ * passed through `askAction`, so this only ever sees an ask the deployment chose
+ * to surface.
+ * @param config - the plugin configuration.
+ * @param resolved - the verdict resolved so far.
+ * @returns the verdict to apply, with `ask` resolved through the fallback.
+ */
+export function applyAskFallback(config: Config, resolved: ResolvedDecision): ResolvedDecision {
+  if (resolved.verdict !== 'ask' || config.askFallback !== 'deny') return resolved
+  return {
+    ...resolved,
+    verdict: 'deny',
+    reason: `${resolved.reason} (askFallback is "deny", so the prompt is not surfaced)`,
+  }
+}
+
+/**
  * Resolve one tool call into exactly one verdict.
  *
  * Resolving is side-effect free apart from consuming a grant, which is why it is
@@ -169,11 +192,11 @@ export async function resolveDecision(
 
   const override = matchOverride(config, input)
   if (override !== undefined) {
-    return {
+    return applyAskFallback(config, {
       verdict: override.action,
       source: 'override',
       reason: override.reason ?? `configuration overrides the verdict for "${input.toolName}"`,
-    }
+    })
   }
 
   if (config.approval.grantsEnabled) {
@@ -202,7 +225,7 @@ export async function resolveDecision(
     input.signal,
   )
 
-  return fromOutcome(options, outcome)
+  return applyAskFallback(config, fromOutcome(options, outcome))
 }
 
 /** Derive the working directory reported to the engine from configuration. */
@@ -210,6 +233,34 @@ function resolveCwd(config: Config): string {
   const configured = config.policyContext.attributes['cwd']
   return configured ?? process.cwd()
 }
+
+/**
+ * Report whether a decision is the engine's no-match default rather than a
+ * rule's verdict.
+ *
+ * AgentJail's own default decision is `{"action": "allow"}` with no `rule_id`
+ * (`agentpolicy/policies/default.rego`), and the generated entrypoint this plugin
+ * ships behaves the same way: it names a `rule_id` whenever a rule matched and
+ * emits a bare `allow` when none did. An `allow` with no rule behind it is
+ * therefore the engine reporting "no rule matched", which is exactly the case
+ * `defaultAction` governs. That fallback cannot live in the policy itself, since
+ * a rule author cannot see this plugin's configuration.
+ *
+ * The daemon's own resolver labels a synthesized default `resolver/default`, and
+ * its hook treats that id as "not a real rule", so it counts as a no-match too.
+ *
+ * A `would_action` means a rule matched and the daemon declined to enforce it
+ * because it is monitoring, so that is a rule verdict, not a no-match.
+ * @param decision - the engine's decision.
+ * @returns whether the engine matched no rule.
+ */
+export function isNoRuleMatch(decision: PolicyDecision): boolean {
+  if (decision.action !== 'allow' || decision.wouldAction !== undefined) return false
+  return decision.ruleId === undefined || decision.ruleId === DEFAULT_RULE_ID
+}
+
+/** Rule id the daemon's resolver attaches to a decision no rule produced. */
+const DEFAULT_RULE_ID = 'resolver/default'
 
 /** Fold a client outcome into a verdict. */
 function fromOutcome(options: DecisionEngineOptions, outcome: EvaluateOutcome): ResolvedDecision {
@@ -238,33 +289,51 @@ function fromOutcome(options: DecisionEngineOptions, outcome: EvaluateOutcome): 
   }
 
   const decision = outcome.decision
-  const verdict = mapEngineAction(config, decision.action)
-  const resolved: ResolvedDecision = {
-    verdict,
-    source: outcome.cached ? 'cache' : 'engine',
-    reason: decision.reason ?? defaultReason(verdict, decision.action),
-    ...(decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
-    ...(decision.impact !== undefined ? { impact: decision.impact } : {}),
-    ...(decision.wouldAction !== undefined ? { wouldAction: decision.wouldAction } : {}),
+  // The engine matched no rule. Its own `allow` is a placeholder, not a verdict:
+  // the operator's configured default decides. Applying it here rather than in
+  // the policy keeps the two concepts apart — `failureAction` means "I do not
+  // know", `defaultAction` means "no rule matched" — and it is the only place the
+  // plugin can see this deployment's configuration.
+  let resolved: ResolvedDecision
+  if (isNoRuleMatch(decision)) {
+    resolved = {
+      verdict: config.defaultAction,
+      source: 'default',
+      reason: `AgentJail policy matched no rule for "${outcome.request.harnessToolName}"; applying the configured default action "${config.defaultAction}"`,
+    }
+  } else {
+    const verdict = mapEngineAction(config, decision.action)
+    resolved = {
+      verdict,
+      source: outcome.cached ? 'cache' : 'engine',
+      reason: decision.reason ?? defaultReason(verdict, decision.action),
+      ...(decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
+      ...(decision.impact !== undefined ? { impact: decision.impact } : {}),
+      ...(decision.wouldAction !== undefined ? { wouldAction: decision.wouldAction } : {}),
+    }
   }
-  if (verdict === 'deny') {
+
+  // `askFallback` is applied before the alert is chosen, so a deployment that
+  // fails closed on asks reports a denial rather than an ask no one will answer.
+  const final = applyAskFallback(config, resolved)
+  if (final.verdict === 'deny') {
     options.onAlert?.({
       kind: 'denied',
       toolName: outcome.request.harnessToolName,
       sessionId: outcome.request.sessionId,
-      message: resolved.reason,
-      ...(decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
+      message: final.reason,
+      ...(final.ruleId !== undefined ? { ruleId: final.ruleId } : {}),
     })
-  } else if (verdict === 'ask') {
+  } else if (final.verdict === 'ask') {
     options.onAlert?.({
       kind: 'asked',
       toolName: outcome.request.harnessToolName,
       sessionId: outcome.request.sessionId,
-      message: resolved.reason,
-      ...(decision.ruleId !== undefined ? { ruleId: decision.ruleId } : {}),
+      message: final.reason,
+      ...(final.ruleId !== undefined ? { ruleId: final.ruleId } : {}),
     })
   }
-  return resolved
+  return final
 }
 
 /** Build a reason when the engine supplied none. */
