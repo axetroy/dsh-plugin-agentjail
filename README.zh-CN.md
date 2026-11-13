@@ -53,29 +53,49 @@ agent → 工具调用 → tools/pre-execute → DH-AgentJail → AgentJail daem
 #    @deepseek-ai/dsh-base 作为第一个 bundle。
 dsh plugin --profile secure add dsh-plugin-agentjail
 
-# 2. 如果 agentjail 在 PATH 中，插件会自动帮你启动守护进程。
+# 2. 启动 harness。插件会启动它自带的 AgentJail 守护进程。
 dsh --profile secure
 ```
 
+无需其他步骤。发布的包中携带了插件所测试过的 AgentJail 构建，因此安装插件就等于
+安装了引擎。
+
 ### 需要单独安装 AgentJail 吗？
 
-只需要装一次，而且只需要那个二进制文件。守护进程由插件托管，因此没有单独的「启动守护
-进程」这一步：
+不需要。这正是内置（vendoring）的意义：插件与引擎版本同步演进，上游发布新版本
+也无法在插件未测试过的情况下替换其底层的二进制文件。
 
-- **已经有守护进程在运行。** 插件直接使用它，不做任何改动。你通过 systemd、launchd 或
+插件按以下顺序解析二进制，取第一个可用者：
+
+| 顺序 | 来源            | 何时使用                                   |
+| ---- | --------------- | ------------------------------------------ |
+| 1    | `daemon.binary` | 显式路径。始终优先，用于固定你自己的构建。 |
+| 2    | `AGENTJAIL_BIN` | 环境变量中的显式路径。                     |
+| 3    | **内置构建**    | 包内自带的构建。默认值。                   |
+| 4    | `PATH`          | 你自己安装的 `agentjail`。                 |
+| 5    | 托管下载        | 仅在 `daemon.managedInstall: true` 时。    |
+
+在启动任何东西之前，插件会执行 `<binary> --no-color version`，并拒绝支持窗口
+（`>=1.8.0 <2.0.0`）之外的构建。被拒绝的二进制会让插件继续拒绝受保护的调用，
+而不是去运行一个它并不理解的引擎。支持窗口对某个插件版本是固定的；设置
+`daemon.requireSupportedVersion: false` 可完全跳过该检查。
+
+守护进程的使用、启动或保留规则如下：
+
+- **已有守护进程在应答。** 插件直接使用它，不做任何改动。你通过 systemd、launchd 或
   `agentjail install` 启动的守护进程保持自己的生命周期。设置
   `daemon.supervise: false` 可以完全关闭托管。
-- **`agentjail` 在 PATH 中，但没有在运行。** 插件会启动 `agentjail daemon`，并在插件
-  卸载时把它停掉。
-- **什么都没装。** 用 `daemon.binary` 指向一个二进制文件，或设置
-  `daemon.managedInstall: true`，插件会在首次加载时把发行版二进制下载到
-  `~/.agentjail/dsh-plugin-agentjail/bin`。下载会先校验发行版公布的 SHA-256 再解压。
+- **没有守护进程在应答。** 插件以 `agentjail daemon` 启动解析到的二进制，运行在它自己
+  状态目录下的私有套接字上，并在插件卸载时停止它。它会显式传入 `--socket`、`--db` 和
+  `--log`，因为守护进程并不读取 `AGENTJAIL_SOCKET`；同时它会给守护进程一个私有
+  `HOME`，使其无法接触到无关安装遗留的陈旧控制平面。
+- **`daemon.binary` 指向某个二进制。** 使用该二进制，忽略内置构建。
 
 [`docs/INSTALL.md`](./docs/INSTALL.md) 说明了每种情况、查找顺序，以及托管下载中残留的
 信任问题。
 
 ```sh
-# 如果你想自己管理，也可以一次性自行安装守护进程。
+# 可选：如果你更想自己管理守护进程，就自行安装它。
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
@@ -104,7 +124,8 @@ dsh plugin --profile secure add github:axetroy/dsh-plugin-agentjail#v0.1.0
 
 - Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
-- 一个 AgentJail 二进制文件（在 `PATH` 中、显式配置，或由插件下载）
+- 别无其他。AgentJail 引擎随插件一起发布；只有在你想自己指定时，才需要用
+  `daemon.binary` 覆盖它。
 
 ## 配置
 

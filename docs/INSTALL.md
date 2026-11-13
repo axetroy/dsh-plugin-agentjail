@@ -6,10 +6,13 @@ the automatic path asks you to make.
 
 ## What has to exist
 
-One thing: an `agentjail` binary on the machine. The plugin does not require the
-daemon to be running, and it does not require the AgentJail installer's shell
-hooks — those exist to govern other agents, and this plugin governs DeepSeek
-Harness through its own `tools/pre-execute` gate.
+Nothing beyond the plugin. The published package carries the AgentJail build the
+plugin was tested against, so a fresh install has a working engine with no second
+step.
+
+The plugin does not require the daemon to be running, and it does not require the
+AgentJail installer's shell hooks — those exist to govern other agents, and this
+plugin governs DeepSeek Harness through its own `tools/pre-execute` gate.
 
 A socket that is already answering is used as-is. Everything below is about the
 case where no daemon is running.
@@ -21,14 +24,42 @@ the first usable one:
 
 1. `daemon.binary` in the plugin configuration.
 2. `AGENTJAIL_BIN` in the environment.
-3. `agentjail` on `PATH`.
-4. `~/.agentjail/dsh-plugin-agentjail/bin/agentjail`, the managed download
-   directory.
+3. `vendor/<platform>-<arch>/agentjail` inside the installed package — the
+   vendored build, which is the default.
+4. `agentjail` on `PATH`.
+5. `~/.agentjail/dsh-plugin-agentjail/bin/agentjail`, the managed download
+   directory, only when `daemon.managedInstall: true`.
 
 A configured path is authoritative. If `daemon.binary` names a file that is not
 an executable regular file, the plugin reports that path in its failure message
 and does not fall back to a different binary. Silently running something other
 than what you configured is the more surprising failure.
+
+## The vendored build
+
+Vendoring exists so that an upstream release cannot change the engine under a
+plugin that was not tested against it. The build is pinned in `vendor.lock.json`,
+downloaded and checksum-verified by `scripts/vendor-agentjail.mjs` at release
+time, and shipped in the package. Nothing is fetched at install time or at run
+time.
+
+Before starting any binary, the plugin runs `<binary> --no-color version` and
+classifies the result against `SUPPORTED_VERSION_WINDOW` (`>=1.8.0 <2.0.0`):
+
+| Outcome    | What happens                                                               |
+| ---------- | -------------------------------------------------------------------------- |
+| In window  | The binary is started.                                                     |
+| Too old    | Refused. The plugin keeps applying `failureAction`.                        |
+| Too new    | Refused, because the next major is where the wire contract may be retired. |
+| Unreadable | Refused. An unknown version is never treated as compatible.                |
+
+A refusal leaves the plugin denying protected calls, which is the correct
+posture: no verified engine means no tool runs. The window is fixed for a given
+plugin release; set `daemon.requireSupportedVersion: false` to skip the check
+entirely.
+
+To move to a new upstream build, edit `vendor.lock.json` and let CI vendor it. The
+lock file is a reviewed change on purpose.
 
 ## The three cases
 
@@ -40,41 +71,52 @@ the case for a daemon you manage yourself, whether through `agentjail install`,
 systemd, launchd, or a container entrypoint.
 
 Nothing about your daemon's lifecycle changes. The dashboard reports
-`supervision: external`.
+`supervision: external`. Reload is not attempted against an adopted daemon,
+because the plugin has no control token for it and reloading a daemon it does not
+own is not its business.
 
-### The binary exists but no daemon is running
+### No daemon is running
 
-With `daemon.supervise: true` (the default), the plugin starts
-`agentjail daemon` with the configured `daemon.args`, waits up to
-`daemon.startTimeoutMs` for it to answer, and reports `supervision: started`.
+With `daemon.supervise: true` (the default), the plugin starts the resolved binary
+with `daemon.args`, waits up to `daemon.startTimeoutMs` for it to answer, and
+reports `supervision: started`.
 
-The child is detached and leads its own process group. When the plugin unloads it
-sends `SIGTERM` to that group, and only to that group. A daemon the plugin did not
-start is never signalled.
+Three things are deliberately explicit about that start:
+
+- **The socket is a flag.** The plugin passes `--socket`, `--db`, and `--log`.
+  Upstream's daemon does not read `AGENTJAIL_SOCKET`, so without the flag it would
+  bind its own default socket and the plugin would never reach the daemon it
+  started.
+- **`HOME` is private.** The daemon runs with `HOME` set to a directory inside the
+  plugin's state root. Upstream derives its control socket and control token from
+  `HOME`, so this keeps a start from reaching a stale control plane left behind by
+  an unrelated AgentJail install.
+- **The child is detached** and leads its own process group. When the plugin
+  unloads it sends `SIGTERM` to that group, and only to that group. A daemon the
+  plugin did not start is never signalled.
 
 If the daemon does not answer in time, the plugin reports why and keeps applying
 the configured `failureAction`. Supervision failing is not a reason to allow a
 call.
 
-### Nothing is installed
+### You want to own the engine
 
-Two options, and the difference between them is who trusts what.
-
-**Point at a binary.** Install AgentJail yourself and set `daemon.binary`, or put
-it on `PATH`:
+Point at a binary. Install AgentJail yourself and set `daemon.binary`, or put it
+on `PATH`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/LuD1161/agentjail/main/install.sh | sh
 ```
 
-This is the recommended path. The upstream installer verifies a signed release
-manifest, and you see exactly what was installed.
+The upstream installer verifies a signed release manifest, and you see exactly
+what was installed. A configured binary still goes through the version gate, so a
+build the plugin does not understand is refused rather than run.
 
-**Let the plugin download one.** Set `daemon.managedInstall: true`. On first load,
-if no binary is resolvable, the plugin downloads the release archive for the
-running platform from `daemon.releaseBaseUrl`, verifies its SHA-256 against the
-release's `SHA256SUMS`, extracts it, and installs it to `daemon.managedDir`
-(default `~/.agentjail/dsh-plugin-agentjail/bin`).
+Alternatively, set `daemon.managedInstall: true`. On first load, if no binary is
+resolvable, the plugin downloads the release archive for the running platform from
+`daemon.releaseBaseUrl`, verifies its SHA-256 against the release's `SHA256SUMS`,
+extracts it, and installs it to `daemon.managedDir` (default
+`~/.agentjail/dsh-plugin-agentjail/bin`).
 
 This is off by default. Downloading and executing a release binary is your trust
 decision, not a plugin default.

@@ -120,6 +120,16 @@ export class ApprovalUnavailableError extends AgentJailError {
   }
 }
 
+/** Describe an arbitrary thrown value without relying on default stringification. */
+export function describeUnknown(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value) ?? 'unknown failure'
+  } catch {
+    return 'unknown failure'
+  }
+}
+
 /**
  * Normalize an arbitrary thrown value into an `AgentJailError`.
  *

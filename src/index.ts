@@ -46,6 +46,8 @@ import {
   type SupervisionState,
 } from './adapter/supervisor.js'
 import { installManagedBinary } from './adapter/installer.js'
+import { currentPackageRoot, resolveRuntimePaths, vendoredDirectory } from './adapter/runtime.js'
+import { controlPlanePaths, reloadViaControlPlane } from './adapter/control.js'
 import { registerDashboardRoutes, type WebServerLike } from './ui/routes.js'
 import { renderDashboardText, type DashboardData } from './ui/dashboard.js'
 
@@ -224,8 +226,23 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     options.onAlert?.(alert)
   }
 
+  // The state directory is derived once and shared by the client, the supervisor,
+  // and the control-plane reload, so the socket a daemon binds, the socket the
+  // plugin connects to, and the control socket it reloads through always belong
+  // to the same daemon.
+  const runtimePaths = resolveRuntimePaths(config.daemon.stateDir)
+  const packageRoot = currentPackageRoot()
+  const vendoredDir = vendoredDirectory(packageRoot ?? runtimePaths.root)
+  // By default the plugin runs its own daemon on its own socket, which is what
+  // makes installing the plugin sufficient. An explicit `socketPath` (or
+  // `AGENTJAIL_SOCKET`) redirects the plugin at a daemon someone else manages.
+  const agentSocketPath =
+    config.socketPath.length > 0
+      ? config.socketPath
+      : (process.env['AGENTJAIL_SOCKET'] ?? runtimePaths.socketPath)
+
   const client = new AgentJailClient({
-    socketPath: config.socketPath,
+    socketPath: agentSocketPath,
     timeoutMs: config.timeoutMs,
     reconnectDelayMs: config.reconnectDelayMs,
     maxReconnectDelayMs: config.maxReconnectDelayMs,
@@ -257,11 +274,14 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
   const supervisor = new DaemonSupervisor({
     enabled: config.daemon.supervise,
     binary: config.daemon.binary,
-    socketPath: client.socketPath,
+    socketPath: agentSocketPath,
     managedDir,
+    vendoredDir,
+    stateDir: runtimePaths.root,
     args: config.daemon.args,
     startTimeoutMs: config.daemon.startTimeoutMs,
     pollIntervalMs: config.daemon.pollIntervalMs,
+    requireSupportedVersion: config.daemon.requireSupportedVersion,
   })
 
   const gate = createPreToolUseGate(ctx, {
@@ -317,7 +337,11 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
    */
   const installManagedBinaryIfConfigured = async (): Promise<void> => {
     if (!config.daemon.managedInstall) return
-    const existing = resolveDaemonBinary({ binary: config.daemon.binary, managedDir })
+    const existing = resolveDaemonBinary({
+      binary: config.daemon.binary,
+      managedDir,
+      vendoredDir,
+    })
     if (existing !== undefined && existing.source !== 'managed') {
       logger?.info?.('agentjail: using the existing agentjail binary at %s', existing.path)
       return
@@ -448,11 +472,41 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     },
     invalidateCache: () => client.invalidate(),
     reloadPolicy: async () => {
-      try {
-        return await client.reloadPolicy()
-      } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      // Reload is served only on the daemon's privileged control socket, never on
+      // the agent socket the client pools.
+      //
+      // Only a daemon this plugin started is reloaded. An adopted daemon belongs
+      // to the operator, and its control plane is whatever happens to sit under
+      // the process `HOME` - which is not necessarily the daemon the client is
+      // talking to. Reloading a daemon the plugin does not own, or the wrong one,
+      // is worse than reporting that it could not reload, so an adopted daemon is
+      // reported instead.
+      if (supervisor.current !== 'started') {
+        return {
+          ok: false,
+          error:
+            'policy reload is available only for a daemon this plugin started; the configured daemon is managed elsewhere',
+        }
       }
+      const result = await reloadViaControlPlane(
+        controlPlanePaths(runtimePaths.home),
+        config.timeoutMs,
+      )
+      if (result.ok) {
+        client.invalidate()
+        return { ok: true }
+      }
+      // The control plane was unreachable or refused. Restarting the managed
+      // daemon reloads policy as a side effect of starting it.
+      if (supervisor.restart() !== undefined) {
+        const ready = await probeDaemon()
+        if (ready) {
+          client.invalidate()
+          logger?.info?.('agentjail: policy reloaded by restarting the managed daemon')
+          return { ok: true }
+        }
+      }
+      return { ok: false, ...(result.error !== undefined ? { error: result.error } : {}) }
     },
     alerts: () => [...alerts],
     supervision: () => supervisor.current,
@@ -463,6 +517,12 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
         logger?.info?.('agentjail: started a policy daemon via %s', outcome.binary?.path ?? '?')
       } else if (outcome.state === 'external') {
         logger?.info?.('agentjail: using the daemon already running at %s', client.socketPath)
+      } else if (outcome.state === 'incompatible') {
+        logger?.error?.(
+          'agentjail: refusing to start an unsupported AgentJail build (%s); applying the configured failure action "%s"',
+          outcome.reason ?? 'unknown version',
+          config.failureAction,
+        )
       } else if (outcome.reason !== undefined) {
         logger?.warn?.(
           'agentjail: no policy daemon available (%s); applying the configured failure action "%s"',

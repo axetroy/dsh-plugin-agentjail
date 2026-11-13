@@ -11,3 +11,8 @@ dist/
 .vitest/
 results/
 sarif-results/
+# Vendored AgentJail builds are fetched and checksum-verified at release time
+# by `scripts/vendor-agentjail.mjs`, not committed. A release publishes them, so
+# the installed package is self-contained; a checkout falls back to a managed or
+# PATH binary.
+vendor/

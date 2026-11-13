@@ -212,6 +212,74 @@ describe('coverage gate', () => {
   })
 })
 
+describe('vendored build', () => {
+  const lock = JSON.parse(readFileSync(resolve(root, 'vendor.lock.json'), 'utf8')) as {
+    version: string
+    releaseBaseUrl: string
+    supportedWindow: { min: string; maxMajor: number }
+    targets: Record<string, { asset: string; sha256: string }>
+  }
+
+  it('ships the vendor directory in the published package', () => {
+    expect(manifest.files).toContain('vendor')
+  })
+
+  it('pins a version and a full-length checksum for every platform it ships', () => {
+    expect(lock.version).toMatch(/^v\d+\.\d+\.\d+$/)
+    const targets = Object.keys(lock.targets)
+    expect(targets.length).toBeGreaterThan(0)
+    for (const target of targets) {
+      const entry = lock.targets[target]
+      // A short or placeholder digest would make the release-time check a no-op.
+      expect(entry?.sha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(entry?.asset).toContain(lock.version)
+    }
+  })
+
+  it('covers the platforms the plugin claims to support', () => {
+    for (const target of ['linux-amd64', 'linux-arm64', 'darwin-amd64', 'darwin-arm64']) {
+      expect(Object.keys(lock.targets)).toContain(target)
+    }
+  })
+
+  it('pins the supported window the plugin gates on', () => {
+    expect(lock.supportedWindow.min).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(lock.supportedWindow.maxMajor).toBeGreaterThan(0)
+  })
+
+  it('keeps the vendored build out of version control', () => {
+    // A 41 MB binary per platform does not belong in git. It is fetched and
+    // verified at release time instead.
+    const ignore = readFileSync(resolve(root, '.gitignore'), 'utf8')
+    expect(ignore).toMatch(/^vendor\/$/m)
+  })
+
+  it('verifies the archive before unpacking it, so a mismatch never runs', () => {
+    const script = readFileSync(resolve(root, 'scripts/vendor-agentjail.mjs'), 'utf8')
+    // The checksum comparison must precede the extraction call, or a tampered
+    // download could reach the filesystem as a runnable file. The function
+    // definition is skipped, so this compares the two call sites.
+    const digest = script.indexOf('sha256File(archive)')
+    const compare = script.indexOf('checksum mismatch')
+    const extract = script.indexOf('extractArchive(archive, unpacked)')
+    expect(digest).toBeGreaterThan(-1)
+    expect(extract).toBeGreaterThan(-1)
+    expect(digest).toBeLessThan(extract)
+    expect(compare).toBeLessThan(extract)
+  })
+
+  it('vendors at release time so a published package is self-contained', () => {
+    const release = readFileSync(resolve(root, '.github/workflows/release.yml'), 'utf8')
+    expect(release).toContain('npm run vendor:all')
+  })
+
+  it('exercises the real binary in CI, not just a stand-in', () => {
+    const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
+    expect(ci).toContain('AGENTJAIL_E2E=1')
+    expect(ci).toContain('npm run vendor')
+  })
+})
+
 describe('codeql workflow', () => {
   const codeql = readFileSync(resolve(root, '.github/workflows/codeql.yml'), 'utf8')
 

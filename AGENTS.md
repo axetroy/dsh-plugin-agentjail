@@ -51,12 +51,17 @@ a security regression, not a style disagreement.
 | `src/hooks/`                    | `tools/pre-execute` gate, post-execute observer, approval answerer      |
 | `src/security/`                 | decision resolution, normalization, grants, policy templates, redaction |
 | `src/adapter/`                  | socket connection, protocol frames, caching client                      |
+| `src/adapter/version.ts`        | parse `agentjail version` output and gate on the supported window       |
+| `src/adapter/runtime.ts`        | resolve the package root, state root, and vendored binary path          |
+| `src/adapter/control.ts`        | daemon control-plane socket: token read and policy reload               |
 | `src/adapter/supervisor.ts`     | locate and start a daemon; never adopts or stops a foreign one          |
 | `src/adapter/installer.ts`      | opt-in managed download with SHA-256 verification                       |
 | `src/ui/`                       | read-only dashboard rendering and its HTTP routes                       |
 | `src/audit/`, `src/governance/` | audit trail, metrics, reports                                           |
 | `src/config/schema.ts`          | Schemastery config; `Config` interface + schema export                  |
 | `policy/`                       | Generated Rego bundle (see below)                                       |
+| `vendor.lock.json`              | pinned AgentJail version, per-platform assets, and SHA-256 digests      |
+| `scripts/vendor-agentjail.mjs`  | download and checksum-verify the pinned build into `vendor/`            |
 | `scripts/`                      | CI helper checks (`check-exports.mjs`, `check-bundle.mjs`)              |
 
 ## Policy templates are generated
@@ -126,6 +131,43 @@ keep current.
 
 Prettier formats everything except `DESIGN.md` (authored prose, see
 `.prettierignore`). Do not run Prettier over `DESIGN.md`.
+
+## The vendored AgentJail binary
+
+The plugin ships the AgentJail build it was tested against, so an upstream release
+cannot change the engine under a plugin that was not tested against it. Three rules
+keep that honest.
+
+**The binary is not in git.** `vendor/` is gitignored; each platform's build is
+about 40 MB and belongs in a release, not in history. `vendor.lock.json` is the
+committed artifact: a pinned version, the per-platform asset names, and a
+full-length SHA-256 for each. Edit the lock file to move to a new build; the lock
+file is a reviewed change on purpose.
+
+**The digest is checked before extraction.** `scripts/vendor-agentjail.mjs`
+downloads the archive, hashes it, and refuses a mismatch before unpacking
+anything. A test asserts the comparison precedes the extraction call, so the
+ordering cannot regress silently. A tampered or truncated download must never
+reach the filesystem as a runnable file.
+
+**The version is checked before the daemon is started.** `src/adapter/version.ts`
+parses `<binary> --no-color version` and classifies it against
+`SUPPORTED_VERSION_WINDOW` (`>=1.8.0 <2.0.0`). Anything outside the window —
+too old, too new, or unreadable — is refused and the plugin stays on its
+`failureAction`. An unknown version is never treated as compatible. The window is
+fixed per plugin release; `daemon.requireSupportedVersion: false` only turns the
+check off.
+
+`npm run vendor` fetches the running platform, `npm run vendor:all` fetches every
+platform, and `npm run vendor:check` asserts the running platform's build is
+present. Release runs `vendor:all` before publishing, and a CI job runs the
+real-binary end-to-end suite (`AGENTJAIL_E2E=1`) against a vendored build so the
+self-contained claim is tested rather than asserted.
+
+Resolution order, highest priority first: `daemon.binary`, `AGENTJAIL_BIN`, the
+vendored build, `PATH`, then the managed download directory. The vendored build is
+the default, not a last resort — a missing `vendor/` (a git checkout rather than a
+published package) falls through to `PATH` rather than failing.
 
 ## Packaging
 

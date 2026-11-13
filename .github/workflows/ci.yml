@@ -100,6 +100,44 @@ jobs:
       - name: Check the bundle declares a patch that exists
         run: node scripts/check-bundle.mjs
 
+  # The self-contained claim is the one this project makes most loudly, so it is
+  # tested against the real upstream binary rather than a stand-in. This job
+  # vendors the pinned build, checks its checksum, and drives a real policy
+  # evaluation and a real control-plane reload through it.
+  vendored:
+    name: vendored daemon (real binary)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Vendor the pinned AgentJail build
+        run: npm run vendor
+
+      - name: Verify the vendored build is present
+        run: npm run vendor:check
+
+      - name: Run the real-daemon end-to-end tests
+        run: npm run build && AGENTJAIL_E2E=1 npx vitest run tests/integration/real-daemon.test.ts
+
+      - name: Check the vendored build ships in the package
+        run: |
+          # --ignore-scripts keeps `prepare` from running tsdown, whose progress
+          # output would otherwise land in the JSON and break the parse.
+          npm pack --dry-run --json --ignore-scripts > "$RUNNER_TEMP/pack.json"
+          node -e "
+            const [entry] = require(process.env.RUNNER_TEMP + '/pack.json')
+            const vendored = entry.files.filter((f) => f.path.startsWith('vendor/'))
+            if (vendored.length === 0) throw new Error('the package does not include the vendored build')
+            console.log('package includes', vendored.length, 'vendored files')
+          "
+
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

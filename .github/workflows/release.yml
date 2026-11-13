@@ -90,6 +90,14 @@ jobs:
           npm run test:coverage
           npm run build
 
+      # The published package carries the AgentJail builds it was tested against,
+      # so installing the plugin installs the engine. Each archive is verified
+      # against `vendor.lock.json` before it is unpacked; a mismatch fails the
+      # release rather than shipping an unexpected binary.
+      - name: Vendor AgentJail binaries
+        if: github.event_name == 'push'
+        run: npm run vendor:all
+
       - name: Dry run
         if: github.event_name == 'workflow_dispatch'
         run: |
