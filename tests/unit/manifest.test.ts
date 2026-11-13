@@ -152,9 +152,63 @@ describe('release workflow', () => {
     expect(effective).toContain('11.5.1')
   })
 
-  it('checks the tag matches package.json before publishing', () => {
-    expect(effective).toContain('GITHUB_REF_NAME')
-    expect(effective).toMatch(/does not match package.json/)
+  it('runs changesets, so a version bump and changelog are generated, not typed', () => {
+    expect(effective).toMatch(/changesets\/action@v1/)
+    expect(effective).toContain('npm run version-packages')
+    expect(effective).toContain('npm run release')
+  })
+
+  it('lets the action open the version pull request it then merges', () => {
+    // Without these the action cannot open the PR that gates a publish.
+    expect(effective).toMatch(/pull-requests:\s*write/)
+    expect(effective).toMatch(/contents:\s*write/)
+  })
+
+  it('tags and publishes through changeset publish, which derives the tag', () => {
+    // `changeset publish` reads the version from package.json to build the tag,
+    // so a tag/version skew is impossible by construction and the old manual
+    // comparison is gone. The publish command is where that now lives.
+    const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>
+    }
+    expect(pkg.scripts['release']).toBe('changeset publish')
+    expect(pkg.scripts['version-packages']).toBe('changeset version')
+  })
+})
+
+describe('changesets configuration', () => {
+  const config = JSON.parse(readFileSync(resolve(root, '.changeset/config.json'), 'utf8')) as {
+    access: string
+    baseBranch: string
+    changelog: string | false
+  }
+
+  it('publishes a public package', () => {
+    expect(config.access).toBe('public')
+  })
+
+  it('bases the version pull request on main, the branch the release runs on', () => {
+    expect(config.baseBranch).toBe('main')
+  })
+
+  it('generates a changelog, since CHANGELOG.md is no longer hand-edited', () => {
+    expect(config.changelog).not.toBe(false)
+  })
+})
+
+describe('coverage gate', () => {
+  const vitest = readFileSync(resolve(root, 'vitest.config.ts'), 'utf8')
+
+  it('fails a pull request that drops coverage below the baseline', () => {
+    expect(vitest).toMatch(/thresholds:\s*\{/)
+    for (const key of ['statements', 'branches', 'functions', 'lines']) {
+      expect(vitest).toMatch(new RegExp(`${key}:\\s*\\d+`))
+    }
+  })
+
+  it('measures coverage on every CI run, so the gate cannot be skipped', () => {
+    const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
+    expect(ci).toContain('npm run test:coverage')
   })
 })
 

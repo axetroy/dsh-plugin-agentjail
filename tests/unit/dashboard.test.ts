@@ -319,3 +319,169 @@ describe('dashboard routes over HTTP', () => {
     }
   })
 })
+
+describe('dashboard rendering branches', () => {
+  it('tones each verdict and the unknown fallback', () => {
+    const records = (['deny', 'ask', 'allow', 'weird'] as const).map((verdict, index) => ({
+      ...data().records[0]!,
+      seq: index,
+      verdict: verdict as never,
+    }))
+    const html = renderDashboardHtml(data({ records }), 0)
+    expect(html).toContain('pill bad')
+    expect(html).toContain('pill warn')
+    expect(html).toContain('pill ok')
+    expect(html).toContain('pill muted')
+  })
+
+  it('falls back to a dash when the deny rate is not finite', () => {
+    const stats = { ...data().stats, denyRate: Number.NaN }
+    expect(renderDashboardText(data({ stats }))).toContain('deny rate   —')
+    expect(renderDashboardHtml(data({ stats }), 0)).toContain('—')
+  })
+
+  it('tones the engine and supervision tiles for the unhealthy case', () => {
+    const unhealthy = data({
+      health: { ...data().health, state: 'unavailable' },
+      supervision: 'disabled',
+    })
+    const html = renderDashboardHtml(unhealthy, 0)
+    expect(html).toContain('tile-value bad')
+    expect(html).toContain('tile-value warn')
+  })
+
+  it('uses a rule id when present and the source otherwise', () => {
+    const withRule = renderDashboardHtml(data(), 0)
+    expect(withRule).toContain('no-rm-rf')
+    const { ruleId: _omitted, ...noRule } = data().records[0]!
+    const withoutRule = renderDashboardHtml(data({ records: [noRule] }), 0)
+    expect(withoutRule).toContain('engine')
+  })
+
+  it('renders a one-time grant scope and an ask alert tone', () => {
+    const html = renderDashboardHtml(
+      data({
+        grants: [{ ...data().grants[0]!, scope: 'once' }],
+        alerts: [{ kind: 'asked', toolName: 'Bash', sessionId: 's1', message: 'needs approval' }],
+      }),
+      0,
+    )
+    expect(html).toContain('one-time')
+    expect(html).toContain('pill warn')
+  })
+
+  it('caps the recent-decision list in text mode', () => {
+    const many = Array.from({ length: 60 }, (_, index) => ({
+      ...data().records[0]!,
+      seq: index,
+      ruleId: `rule-${index}`,
+    }))
+    const text = renderDashboardText(data({ records: many }))
+    // The slice keeps the first 50, so entry 49 is the last one rendered.
+    expect(text).toContain('rule-49')
+    expect(text).not.toContain('rule-50')
+  })
+
+  it('renders the alert block in text mode', () => {
+    expect(renderDashboardText(data())).toContain('alerts')
+  })
+})
+
+describe('dashboard route error and format branches', () => {
+  async function serve(
+    collect: () => DashboardData,
+    run: (base: string) => Promise<void>,
+  ): Promise<void> {
+    const server = fakeServer()
+    registerDashboardRoutes(server, {
+      basePath: '/agentjail',
+      collect,
+      refreshMs: 0,
+      recordLimit: 200,
+    })
+    const http = createServer((req, res) => server.dispatch(req, res))
+    await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
+    const { port } = http.address() as AddressInfo
+    try {
+      await run(`http://127.0.0.1:${port}`)
+    } finally {
+      http.closeAllConnections?.()
+      await new Promise<void>((resolve) => http.close(() => resolve()))
+    }
+  }
+
+  it('serves JSON and HTML when the format parameter asks for them', async () => {
+    await serve(
+      () => data(),
+      async (base) => {
+        const json = await fetch(`${base}/agentjail?format=json`)
+        expect(json.headers.get('content-type')).toContain('application/json')
+        expect(((await json.json()) as { stats: { total: number } }).stats.total).toBe(4)
+
+        const html = await fetch(`${base}/agentjail?format=html`)
+        expect(html.headers.get('content-type')).toContain('text/html')
+        expect(await html.text()).toContain('AgentJail security dashboard')
+      },
+    )
+  })
+
+  it('answers 500 in plain text when collection throws on the HTML route', async () => {
+    await serve(
+      () => {
+        // Deliberately not an Error: the route must still render something
+        // useful rather than crash, so this exercises the String(error) path.
+        // eslint-disable-next-line @typescript-eslint/only-throw-error
+        throw 'not an error instance'
+      },
+      async (base) => {
+        const response = await fetch(`${base}/agentjail`)
+        expect(response.status).toBe(500)
+        expect(response.headers.get('content-type')).toContain('text/plain')
+        expect(await response.text()).toContain('not an error instance')
+      },
+    )
+  })
+
+  it('answers 500 when the decisions endpoint cannot collect', async () => {
+    await serve(
+      () => {
+        throw new Error('closed')
+      },
+      async (base) => {
+        const response = await fetch(`${base}/agentjail/api/decisions`)
+        expect(response.status).toBe(500)
+        expect(((await response.json()) as { error: string }).error).toBe('closed')
+      },
+    )
+  })
+
+  it('answers 500 when the health endpoint cannot collect', async () => {
+    await serve(
+      () => {
+        throw new Error('closed')
+      },
+      async (base) => {
+        const response = await fetch(`${base}/agentjail/api/health`)
+        expect(response.status).toBe(500)
+        expect(((await response.json()) as { error: string }).error).toBe('closed')
+      },
+    )
+  })
+
+  it('survives a disposer that throws, since teardown must not fail the unload', () => {
+    const throwing = {
+      register() {
+        return () => {
+          throw new Error('already removed')
+        }
+      },
+    }
+    const dispose = registerDashboardRoutes(throwing, {
+      basePath: '/agentjail',
+      collect: () => data(),
+      refreshMs: 0,
+      recordLimit: 10,
+    })
+    expect(() => dispose()).not.toThrow()
+  })
+})

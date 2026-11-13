@@ -1,18 +1,28 @@
-# Release: publish to npm with trusted publishing (OIDC).
+# Release: version and publish with changesets, then npm trusted publishing.
 #
-# There is no npm token in this workflow. The `id-token: write` permission lets
-# GitHub Actions mint a short-lived OIDC token, and the npm CLI exchanges it for
-# a publish credential scoped to this workflow. Nothing here can be replayed
-# from a leaked secret, because no long-lived secret is involved.
+# Two things happen here, both driven by `changesets/action`:
 #
-# One-time setup on npmjs.com (a maintainer does this once per package):
-#   Package -> Settings -> Trusted publishing -> Add trusted publisher ->
-#   GitHub Actions, with:
-#     Organization or user : axetroy
-#     Repository           : dsh-plugin-agentjail
-#     Workflow filename    : release.yml
-#   Then, for maximum security: Settings -> Publishing access ->
-#   "Require two-factor authentication and disallow tokens".
+#   1. On a push to `main` that adds a changeset, it opens (or updates) a
+#      "Version Packages" pull request. That PR runs `changeset version`, which
+#      consumes every changeset, bumps `package.json`, and writes `CHANGELOG.md`.
+#      Nothing is published while that PR is open.
+#   2. When that PR is merged, `main` has no changesets left and a version bump,
+#      so it runs the publish command: `changeset publish` pushes the `v<version>`
+#      git tag, publishes to npm, and the action opens a GitHub release.
+#
+# Publishing uses npm trusted publishing (OIDC), not a token. There is no
+# `NPM_TOKEN` anywhere in this file. The `id-token: write` permission lets GitHub
+# mint a short-lived OIDC token that the npm CLI exchanges for a publish
+# credential scoped to this workflow. Nothing here can be replayed from a leaked
+# secret, because no long-lived secret is involved.
+#
+# One-time setup, a maintainer does each once:
+#   npmjs.com -> Package -> Settings -> Trusted publishing -> Add trusted publisher
+#     GitHub Actions, Organization or user `axetroy`,
+#     Repository `dsh-plugin-agentjail`, Workflow filename `release.yml`.
+#   Repository -> Settings -> Actions -> General -> Workflow permissions, and
+#     enable "Allow GitHub Actions to create and approve pull requests", so the
+#     action can open the Version Packages pull request with the built-in token.
 #
 # Requirements: npm CLI >= 11.5.1 and Node >= 22.14.0, which `setup-node`
 # satisfies below. Provenance is generated automatically for a public package
@@ -22,25 +32,29 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+  # Manual runs only report what a release would do. Publishing stays on the
+  # push path so a merge is the only way a version reaches the registry.
   workflow_dispatch:
-    inputs:
-      dry-run:
-        description: Build and pack without publishing
-        type: boolean
-        default: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  publish:
-    name: publish to npm
+  release:
+    name: version and publish
     runs-on: ubuntu-latest
     permissions:
-      # Required for OIDC. Granting it at the job keeps the rest read-only.
+      # `changesets/action` opens the version pull request, pushes the release
+      # tag, and creates the GitHub release with this token.
+      contents: write
+      pull-requests: write
+      # Required for OIDC. The npm CLI mints its publish credential from it.
       id-token: write
-      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -65,36 +79,32 @@ jobs:
       - name: Install
         run: npm ci
 
+      # A version PR is only opened from a green tree, and a publish only ever
+      # runs after that PR merged, so this is the last gate before either. It runs
+      # the same sequence as CI, coverage floor included.
       - name: Verify
-        run: npm run lint && npm run typecheck && npm run test && npm run build
-
-      - name: Check the tag matches package.json
-        if: github.event_name == 'push'
         run: |
-          node -e "
-            const pkg = require('./package.json')
-            const tag = process.env.GITHUB_REF_NAME.replace(/^v/, '')
-            if (pkg.version !== tag) {
-              throw new Error('tag v' + tag + ' does not match package.json version ' + pkg.version)
-            }
-            console.log('tag matches version', pkg.version)
-          "
+          npm run format:check
+          npm run lint
+          npm run typecheck
+          npm run test:coverage
+          npm run build
 
-      - name: Pack
-        run: npm pack --dry-run
+      - name: Dry run
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          npx changeset status --verbose
+          npm pack --dry-run
 
-      - name: Publish
+      - name: Version pull request, or publish
         if: github.event_name == 'push'
-        # No NODE_AUTH_TOKEN: the npm CLI detects the OIDC environment and uses
-        # the short-lived credential it mints from it. `--provenance` is omitted
-        # because trusted publishing generates provenance automatically.
-        run: npm publish --access public
-
-      - name: GitHub release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@v2
+        uses: changesets/action@v1
         with:
-          generate_release_notes: true
-          draft: false
+          version: npm run version-packages
+          publish: npm run release
+          commit: 'chore: version packages'
+          title: 'chore: version packages'
+          # A tag is a release, so create the GitHub release the tag implies.
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

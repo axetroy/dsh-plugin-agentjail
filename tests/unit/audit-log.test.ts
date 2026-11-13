@@ -170,3 +170,51 @@ describe('AuditLog', () => {
     expect(new AuditLog(options()).filePath).toBeUndefined()
   })
 })
+
+describe('AuditLog path and rotation branches', () => {
+  const original = process.env['AGENTJAIL_DSH_AUDIT_PATH']
+  afterEach(() => {
+    if (original === undefined) delete process.env['AGENTJAIL_DSH_AUDIT_PATH']
+    else process.env['AGENTJAIL_DSH_AUDIT_PATH'] = original
+  })
+
+  it('honours AGENTJAIL_DSH_AUDIT_PATH over the per-user default', () => {
+    process.env['AGENTJAIL_DSH_AUDIT_PATH'] = '/mnt/audit/dsh.jsonl'
+    expect(defaultAuditPath()).toBe('/mnt/audit/dsh.jsonl')
+  })
+
+  it('ignores an empty AGENTJAIL_DSH_AUDIT_PATH', () => {
+    process.env['AGENTJAIL_DSH_AUDIT_PATH'] = ''
+    expect(defaultAuditPath().endsWith('.agentjail/dsh-audit.jsonl')).toBe(true)
+  })
+
+  it('appends without rotating while the file stays under the ceiling', async () => {
+    const directory = await temporaryDirectory()
+    const filePath = join(directory, 'audit.jsonl')
+    const audit = new AuditLog(
+      options({ storage: 'file', filePath, maxFileBytes: 100_000, maxRotatedFiles: 2 }),
+    )
+    await audit.record({ ...base, arguments: { command: 'ls' } })
+    await audit.flush()
+    await audit.record({ ...base, arguments: { command: 'ls' } })
+    await audit.flush()
+    const contents = await readFile(filePath, 'utf8')
+    expect(contents.trim().split('\n')).toHaveLength(2)
+  })
+
+  it('truncates instead of rotating when no generations are configured', async () => {
+    const directory = await temporaryDirectory()
+    const filePath = join(directory, 'audit.jsonl')
+    const audit = new AuditLog(
+      options({ storage: 'file', filePath, maxFileBytes: 200, maxRotatedFiles: 0 }),
+    )
+    for (let index = 0; index < 6; index += 1) {
+      await audit.record({ ...base, arguments: { command: 'x'.repeat(40) } })
+      await audit.flush()
+    }
+    // A single record already exceeds the ceiling, so truncation leaves at most
+    // the record just written rather than accumulating the whole history.
+    const contents = await readFile(filePath, 'utf8')
+    expect(contents.trim().split('\n')).toHaveLength(1)
+  })
+})

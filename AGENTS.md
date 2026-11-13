@@ -157,6 +157,36 @@ Do not reintroduce `NPM_TOKEN` or any `NODE_AUTH_TOKEN` into this workflow. If a
 release fails at publish, check the trusted-publisher configuration and the npm
 CLI version before reaching for a secret.
 
+### Versions and the changelog
+
+Versions and `CHANGELOG.md` are owned by
+[changesets](https://github.com/changesets/changesets), not by hand. Record every
+user-visible change as a changeset (`npm run changeset`, or a `.md` file under
+`.changeset/` with a `'dsh-plugin-agentjail': patch|minor|major` frontmatter
+block). `changesets/action` in `release.yml` then opens a "Version Packages" pull
+request that runs `changeset version` (bumping `package.json`, consuming the
+changesets, writing the changelog) and, once merged, publishes.
+
+Two rules keep this working:
+
+- Do not hand-edit a released section of `CHANGELOG.md`. From `0.2.0` on the
+  sections are generated; only `0.1.0` is hand-written. A change with no changeset
+  is a change that never ships.
+- Keep version headings in the `## 0.2.0` form. changesets locates the insertion
+  point with `^#{1,6}\s+\d+\.\d+`, so a bracketed `## [0.2.0]` heading does not
+  match and the new section lands above the intro instead of below the newest
+  release. `tests/unit/manifest.test.ts` asserts the release workflow is
+  changeset-driven.
+
+## Test coverage
+
+`vitest.config.ts` enforces a 90% floor on statements, branches, functions, and
+lines. Measured values sit a point or two above, so ordinary churn does not trip
+it; a change that drops a metric below 90 fails `npm run test:coverage` and CI.
+When adding a module, add tests for the branches the happy path skips — a missing
+`agent`, an absent optional field, a sink that throws — rather than loosening the
+floor.
+
 ## Security scanning
 
 CodeQL runs the `security-and-quality` query pack, so it reports more than the

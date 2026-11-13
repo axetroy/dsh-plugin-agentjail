@@ -238,3 +238,120 @@ describe('buildReport and renderReport', () => {
     expect(text).toContain('deny rate')
   })
 })
+
+describe('MetricsCollector capacity and ordering branches', () => {
+  it('caps retained samples at the configured maximum', () => {
+    // The cap keeps the newest samples, so an unbounded stream cannot grow the
+    // window without limit.
+    const metrics = new MetricsCollector(
+      { windowMs: 1_000_000, denyRateAlertThreshold: 0.5, denyRateAlertMinSamples: 1000 },
+      3,
+    )
+    for (let index = 0; index < 5; index += 1) {
+      metrics.observe(sample('allow', 1000 + index, `tool-${index}`))
+    }
+    expect(metrics.size).toBe(3)
+    // Equal counts sort by name, so the retained three come back in that order.
+    expect(metrics.snapshot(2000).byTool.map((entry) => entry.toolName)).toEqual([
+      'tool-2',
+      'tool-3',
+      'tool-4',
+    ])
+  })
+
+  it('breaks a tool-count tie by tool name, so the order is stable', () => {
+    const metrics = collector()
+    metrics.observe(sample('allow', 1000, 'zebra'))
+    metrics.observe(sample('allow', 1001, 'alpha'))
+    expect(metrics.snapshot(1002).byTool.map((entry) => entry.toolName)).toEqual(['alpha', 'zebra'])
+  })
+
+  it('suppresses a second alert inside the same window', () => {
+    // One alert per window: a sustained high deny rate must not page per call.
+    const metrics = collector({ denyRateAlertMinSamples: 2, denyRateAlertThreshold: 0.5 })
+    expect(metrics.observe(sample('deny', 1000))).toBeUndefined()
+    expect(metrics.observe(sample('deny', 1001))?.kind).toBe('deny-rate')
+    expect(metrics.observe(sample('deny', 1002))).toBeUndefined()
+  })
+})
+
+describe('renderReport optional branches', () => {
+  it('prints daemon version and last error when the health snapshot has them', () => {
+    const metrics = collector()
+    const audit = new AuditLog({
+      enabled: true,
+      storage: 'memory',
+      filePath: '',
+      maxFileBytes: 0,
+      maxRotatedFiles: 0,
+      redactSensitiveData: true,
+      maxValueChars: 100,
+    })
+    const assembled = buildReport({
+      options: { title: 't', includePolicyDigest: true, recentLimit: 5 },
+      metrics,
+      audit,
+      health: {
+        state: 'degraded',
+        socketPath: '/tmp/s',
+        connected: false,
+        consecutiveFailures: 2,
+        daemonVersion: '0.9.0',
+        lastError: 'socket gone',
+      },
+      grants: [
+        {
+          id: 'g1',
+          scope: 'session',
+          toolName: 'bash',
+          sessionId: 's',
+          digest: 'd',
+          issuedAt: 0,
+          expiresAt: Number.POSITIVE_INFINITY,
+        },
+        {
+          id: 'g2',
+          scope: 'once',
+          toolName: 'write',
+          sessionId: 's',
+          digest: 'e',
+          issuedAt: 0,
+          expiresAt: 1_800_000_000_000,
+        },
+      ],
+    })
+    const text = renderReport(assembled)
+    expect(text).toContain('version: 0.9.0')
+    expect(text).toContain('last error: socket gone')
+    // No decisions yet, so the top-tools list prints its empty marker.
+    expect(text).toContain('(no decisions yet)')
+    expect(text).toContain('expires=never')
+    expect(text).toContain('expires=')
+  })
+
+  it('prints the no-records marker when the recent list is empty', () => {
+    const metrics = collector()
+    const audit = new AuditLog({
+      enabled: true,
+      storage: 'memory',
+      filePath: '',
+      maxFileBytes: 0,
+      maxRotatedFiles: 0,
+      redactSensitiveData: true,
+      maxValueChars: 100,
+    })
+    const assembled = buildReport({
+      options: { title: 't', includePolicyDigest: true, recentLimit: 5 },
+      metrics,
+      audit,
+      health: {
+        state: 'healthy',
+        socketPath: '/tmp/s',
+        connected: true,
+        consecutiveFailures: 0,
+      },
+      grants: [],
+    })
+    expect(renderReport(assembled)).toContain('(none)')
+  })
+})

@@ -323,3 +323,109 @@ describe('resolveDecision', () => {
     expect(resolved.reason.length).toBeGreaterThan(0)
   })
 })
+
+describe('decision edge branches', () => {
+  const engine = (overrides: Record<string, unknown> = {}) => {
+    const cfg = config(overrides)
+    const grants = new GrantStore({ maxGrants: 10, sessionGrantTtlMs: 1000 })
+    return { cfg, grants }
+  }
+
+  it('reports a missing decision and missing error without inventing either', async () => {
+    const { cfg, grants } = engine()
+    const client = clientReturning({})
+    const alerts: Array<{ errorCode?: string }> = []
+    const resolved = await resolveDecision(
+      { config: cfg, client, grants, onAlert: (alert) => alerts.push(alert) },
+      input,
+    )
+    expect(resolved.source).toBe('failure-action')
+    expect(resolved.error).toBeUndefined()
+    expect(resolved.reason).toContain('no decision and no error were reported')
+    // No error means no errorCode on the alert, rather than an undefined field.
+    expect(alerts[0]).not.toHaveProperty('errorCode')
+  })
+
+  it('carries impact and wouldAction from the engine decision', async () => {
+    const { cfg, grants } = engine()
+    const client = clientReturning({
+      decision: {
+        action: 'deny',
+        ruleId: 'no-rm-rf',
+        reason: 'blocked',
+        impact: 'destructive',
+        wouldAction: 'allow',
+        raw: {},
+      },
+    })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.impact).toBe('destructive')
+    expect(resolved.wouldAction).toBe('allow')
+  })
+
+  it('reports an engine decision with no rule id', async () => {
+    const { cfg, grants } = engine({ defaultAction: 'deny' })
+    // wouldAction set means the engine did evaluate a rule, so the no-match
+    // default does not apply and the ruleId stays absent.
+    const client = clientReturning({
+      decision: { action: 'deny', wouldAction: 'deny', raw: {} },
+    })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.ruleId).toBeUndefined()
+    expect(resolved.source).toBe('engine')
+  })
+
+  it('raises an asked alert when the verdict survives askFallback', async () => {
+    const { cfg, grants } = engine()
+    const alerts: Array<{ kind: string }> = []
+    const client = clientReturning({
+      decision: { action: 'ask', reason: 'needs approval', raw: {} },
+    })
+    await resolveDecision(
+      { config: cfg, client, grants, onAlert: (alert) => alerts.push(alert) },
+      input,
+    )
+    expect(alerts[0]?.kind).toBe('asked')
+  })
+
+  it('omits the rule id on an asked alert when the engine supplied none', async () => {
+    const { cfg, grants } = engine()
+    const alerts: Array<{ ruleId?: string }> = []
+    const client = clientReturning({ decision: { action: 'ask', raw: {} } })
+    await resolveDecision(
+      { config: cfg, client, grants, onAlert: (alert) => alerts.push(alert) },
+      input,
+    )
+    expect(alerts[0]).not.toHaveProperty('ruleId')
+  })
+
+  it('explains a configuration remap when the engine supplied no reason', async () => {
+    // askAction deny remaps the engine's ask, so the reason must say the engine
+    // returned ask and the configuration turned it into deny.
+    const { cfg, grants } = engine({ askAction: 'deny' })
+    const client = clientReturning({ decision: { action: 'ask', ruleId: 'rule-x', raw: {} } })
+    const resolved = await resolveDecision({ config: cfg, client, grants }, input)
+    expect(resolved.reason).toContain('configuration maps it to "deny"')
+  })
+
+  it('builds the plain allow and ask reasons when no remap happened', async () => {
+    const allow = await resolveDecision(
+      {
+        config: engine().cfg,
+        client: clientReturning({ decision: { action: 'allow', ruleId: 'r', raw: {} } }),
+        grants: engine().grants,
+      },
+      input,
+    )
+    expect(allow.reason).toBe('AgentJail policy allows this call')
+    const asked = await resolveDecision(
+      {
+        config: engine().cfg,
+        client: clientReturning({ decision: { action: 'ask', ruleId: 'r', raw: {} } }),
+        grants: engine().grants,
+      },
+      input,
+    )
+    expect(asked.reason).toBe('AgentJail policy asks for approval of this call')
+  })
+})

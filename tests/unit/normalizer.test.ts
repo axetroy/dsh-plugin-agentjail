@@ -148,3 +148,102 @@ describe('parseMcpToolName', () => {
     expect(isMcpToolName('mcp__git__status')).toBe(true)
   })
 })
+
+describe('normalizeToolCall optional fields', () => {
+  it('carries a bash justification through when present', () => {
+    const request = normalizeToolCall({
+      ...base,
+      toolName: 'bash',
+      arguments: { command: 'ls', justification: 'list the directory' },
+    })
+    expect(request.toolInput['justification']).toBe('list the directory')
+  })
+
+  it('accepts alternate path key spellings for file tools', () => {
+    for (const key of ['path', 'filePath']) {
+      expect(
+        normalizeToolCall({ ...base, toolName: 'read', arguments: { [key]: '/tmp/a' } }).toolInput[
+          'file_path'
+        ],
+      ).toBe('/tmp/a')
+      expect(
+        normalizeToolCall({ ...base, toolName: 'write', arguments: { [key]: '/tmp/b' } }).toolInput[
+          'file_path'
+        ],
+      ).toBe('/tmp/b')
+      expect(
+        normalizeToolCall({
+          ...base,
+          toolName: 'edit',
+          arguments: { [key]: '/tmp/c' },
+        }).toolInput['file_path'],
+      ).toBe('/tmp/c')
+    }
+  })
+
+  it('defaults a write with no content to an empty string', () => {
+    expect(
+      normalizeToolCall({ ...base, toolName: 'write', arguments: { file_path: '/tmp/a' } })
+        .toolInput['content'],
+    ).toBe('')
+  })
+
+  it('accepts alternate key spellings for edit strings and a patch body', () => {
+    const request = normalizeToolCall({
+      ...base,
+      toolName: 'edit',
+      arguments: {
+        file_path: '/tmp/a',
+        oldString: 'a',
+        newString: 'b',
+        input: '*** Begin Patch',
+      },
+    })
+    expect(request.toolInput['old_string']).toBe('a')
+    expect(request.toolInput['new_string']).toBe('b')
+    expect(request.toolInput['patch']).toBe('*** Begin Patch')
+  })
+
+  it('accepts the skill alias for a skill name', () => {
+    expect(
+      normalizeToolCall({ ...base, toolName: 'skill', arguments: { skill: 'review' } }).toolInput[
+        'name'
+      ],
+    ).toBe('review')
+  })
+
+  it('carries a web_fetch prompt through when present', () => {
+    const request = normalizeToolCall({
+      ...base,
+      toolName: 'web_fetch',
+      arguments: { url: 'https://x.dev', prompt: 'summarize' },
+    })
+    expect(request.toolInput['prompt']).toBe('summarize')
+  })
+
+  it('accepts either allowed-domains key spelling for a web search', () => {
+    expect(
+      normalizeToolCall({
+        ...base,
+        toolName: 'web_search',
+        arguments: { query: 'x', allowedDomains: ['a.dev'] },
+      }).toolInput['allowed_domains'],
+    ).toEqual(['a.dev'])
+    expect(
+      normalizeToolCall({
+        ...base,
+        toolName: 'websearch',
+        arguments: { query: 'x', allowed_domains: ['b.dev'] },
+      }).toolInput['allowed_domains'],
+    ).toEqual(['b.dev'])
+  })
+
+  it('maps the alternate read and fetch spellings onto the same jail tool', () => {
+    expect(normalizeToolCall({ ...base, toolName: 'read_image', arguments: {} }).toolName).toBe(
+      JAIL_TOOL.READ,
+    )
+    expect(normalizeToolCall({ ...base, toolName: 'webfetch', arguments: {} }).toolName).toBe(
+      JAIL_TOOL.WEB_FETCH,
+    )
+  })
+})

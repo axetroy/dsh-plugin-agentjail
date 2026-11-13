@@ -143,3 +143,40 @@ describe('redactValue', () => {
     expect(String((result as Record<string, unknown>)['command'])).toContain('truncated')
   })
 })
+
+describe('redactValue edge cases', () => {
+  it('redacts a sensitive key at the root, where no parent key exists', () => {
+    // The walker passes `undefined` for the root key, so the guard has to allow
+    // that case rather than treating "no key" as "not sensitive".
+    const result = redactValue({ apiKey: 'x' }, { maxValueChars: 100 }) as Record<string, unknown>
+    expect(result['apiKey']).toBe(REDACTED)
+  })
+
+  it('stringifies bigint leaves instead of dropping them', () => {
+    const result = redactValue({ big: 10n }, { maxValueChars: 100 }) as Record<string, unknown>
+    expect(result['big']).toBe('10n')
+  })
+
+  it('labels function and symbol leaves', () => {
+    const result = redactValue(
+      { fn: () => undefined, sym: Symbol('s') },
+      { maxValueChars: 100 },
+    ) as Record<string, unknown>
+    expect(result['fn']).toBe('<function>')
+    expect(result['sym']).toBe('<symbol>')
+  })
+
+  it('marks an object whose key count exceeds the cap', () => {
+    const wide: Record<string, number> = {}
+    for (let index = 0; index < 10; index += 1) wide[`k${index}`] = index
+    const result = redactValue(wide, { maxValueChars: 10, maxItems: 3 }) as Record<string, unknown>
+    expect(result['<truncated>']).toBe('7 more keys')
+  })
+
+  it('leaves null and undefined leaves as they are', () => {
+    expect(redactValue({ a: null, b: undefined }, { maxValueChars: 10 })).toEqual({
+      a: null,
+      b: undefined,
+    })
+  })
+})
