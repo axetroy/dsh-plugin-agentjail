@@ -37,6 +37,9 @@ const ARCHITECTURE_ALIASES: Record<string, string> = {
 /** Platforms the plugin vendors a build for. */
 const SUPPORTED_PLATFORMS = new Set(['linux', 'darwin'])
 
+/** Platforms the plugin vendors a build for, for diagnostics and messages. */
+export const SUPPORTED_PLATFORM_NAMES: readonly string[] = [...SUPPORTED_PLATFORMS]
+
 /** The `<platform>-<arch>` label upstream and this package use for a build. */
 export interface PlatformLabel {
   platform: string
@@ -54,6 +57,38 @@ export function platformLabel(platform: string, arch: string): PlatformLabel | u
   const mapped = ARCHITECTURE_ALIASES[arch]
   if (mapped === undefined) return undefined
   return { platform, arch: mapped }
+}
+
+/**
+ * Explain why no AgentJail build exists for a platform, or `undefined` when one
+ * does.
+ *
+ * The plugin runs its own daemon from a vendored binary, so a platform with no
+ * vendored build has no engine at all. That is a supported outcome — the plugin
+ * fails closed and denies every protected call — but it is not a quiet one: an
+ * operator on an unsupported platform should be told why nothing runs rather
+ * than left to infer it from a wall of denials. This is the message.
+ * @param platform - `process.platform`.
+ * @param arch - `process.arch`.
+ * @returns the reason, or `undefined` when the platform is supported.
+ */
+export function unsupportedPlatformReason(platform: string, arch: string): string | undefined {
+  if (!SUPPORTED_PLATFORMS.has(platform)) {
+    return (
+      `platform "${platform}" is not supported: AgentJail publishes no build for it, and the ` +
+      `daemon speaks only over a Unix domain socket. Supported platforms: ` +
+      `${SUPPORTED_PLATFORM_NAMES.join(', ')}. The plugin will load but cannot reach a policy ` +
+      `engine, so every protected call is denied.`
+    )
+  }
+  if (ARCHITECTURE_ALIASES[arch] === undefined) {
+    return (
+      `architecture "${arch}" is not supported: AgentJail publishes no build for it. ` +
+      `Supported architectures: ${Object.keys(ARCHITECTURE_ALIASES).join(', ')}. The plugin will ` +
+      `load but cannot reach a policy engine, so every protected call is denied.`
+    )
+  }
+  return undefined
 }
 
 /** Every path the plugin's private daemon runtime uses. */

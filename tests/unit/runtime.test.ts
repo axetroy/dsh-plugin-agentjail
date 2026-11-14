@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { archiveName } from '../../src/adapter/installer.js'
 import {
   currentPackageRoot,
   daemonArguments,
@@ -22,6 +23,8 @@ import {
   isExecutableFile,
   platformLabel,
   resolveRuntimePaths,
+  SUPPORTED_PLATFORM_NAMES,
+  unsupportedPlatformReason,
   vendoredBinaryPath,
   vendoredDirectory,
 } from '../../src/adapter/runtime.js'
@@ -47,6 +50,48 @@ describe('platformLabel', () => {
   it('reports no build for an unsupported platform or architecture', () => {
     expect(platformLabel('win32', 'x64')).toBeUndefined()
     expect(platformLabel('linux', 'ia32')).toBeUndefined()
+  })
+
+  it('agrees with the managed installer on which platforms have a build', () => {
+    // The runtime and the installer each carry the platform set, and a
+    // divergence would mean one of them claims a build the other cannot name.
+    // Every supported platform must produce an archive name, and every
+    // unsupported one must not.
+    for (const platform of [...SUPPORTED_PLATFORM_NAMES, 'win32', 'freebsd']) {
+      for (const arch of ['x64', 'arm64', 'ia32']) {
+        const labeled = platformLabel(platform, arch) !== undefined
+        expect(archiveName({ platform, arch }, 'v1.8.2') !== undefined).toBe(labeled)
+      }
+    }
+  })
+})
+
+describe('unsupportedPlatformReason', () => {
+  it('says nothing when the platform has a vendored build', () => {
+    for (const platform of SUPPORTED_PLATFORM_NAMES) {
+      expect(unsupportedPlatformReason(platform, 'x64')).toBeUndefined()
+      expect(unsupportedPlatformReason(platform, 'arm64')).toBeUndefined()
+    }
+  })
+
+  it('names the platform and the supported set when the platform is unknown', () => {
+    const reason = unsupportedPlatformReason('win32', 'x64')
+    expect(reason).toContain('win32')
+    expect(reason).toContain('linux')
+    expect(reason).toContain('darwin')
+    expect(reason).toContain('denied')
+  })
+
+  it('names the architecture when only the architecture is unknown', () => {
+    const reason = unsupportedPlatformReason('linux', 'ia32')
+    expect(reason).toContain('ia32')
+    expect(reason).toContain('x64')
+    expect(reason).toContain('arm64')
+    expect(reason).toContain('denied')
+  })
+
+  it('tells the operator the plugin will still load, so a denial is not a crash', () => {
+    expect(unsupportedPlatformReason('freebsd', 'x64')).toContain('load')
   })
 })
 

@@ -23,6 +23,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution, ToolExecutionResult, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
+// Type-only: pulls the `ctx.webServer` service merge and the
+// `webserver/index-inject` event into this program without requiring a web
+// server at runtime.
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import { Config as ConfigSchema, type Config } from './config/schema.js'
 import { AgentJailClient, type HealthSnapshot } from './adapter/agentjail-client.js'
 import { GrantStore, type Grant } from './security/grants.js'
@@ -46,7 +50,12 @@ import {
   type SupervisionState,
 } from './adapter/supervisor.js'
 import { installManagedBinary } from './adapter/installer.js'
-import { currentPackageRoot, resolveRuntimePaths, vendoredDirectory } from './adapter/runtime.js'
+import {
+  currentPackageRoot,
+  resolveRuntimePaths,
+  unsupportedPlatformReason,
+  vendoredDirectory,
+} from './adapter/runtime.js'
 import { controlPlanePaths, reloadViaControlPlane } from './adapter/control.js'
 import { registerDashboardRoutes, type WebServerLike } from './ui/routes.js'
 import { renderDashboardText, type DashboardData } from './ui/dashboard.js'
@@ -215,6 +224,16 @@ export interface ApplyOptions {
 export function apply(ctx: Context, config: Config, options: ApplyOptions = {}): void {
   const logger = ctx.logger
   const alerts: DecisionAlert[] = []
+
+  // A platform with no vendored build has no engine at all, so every protected
+  // call will be denied. That outcome is correct — fail closed — but it must not
+  // be silent: an operator who installed the plugin on an unsupported platform
+  // should see why in the log rather than infer it from a wall of denials.
+  const platformReason = unsupportedPlatformReason(process.platform, process.arch)
+  if (platformReason !== undefined) {
+    logger?.warn?.('agentjail: %s', platformReason)
+  }
+
   const emitAlert = (alert: DecisionAlert): void => {
     // `governance.alertsEnabled` gates the whole alert surface. Enforcement and
     // the audit trail are unaffected: turning alerts off silences a signal, it
@@ -499,7 +518,10 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
       // The control plane was unreachable or refused. Restarting the managed
       // daemon reloads policy as a side effect of starting it.
       if (supervisor.restart() !== undefined) {
-        const ready = await probeDaemon()
+        // A restarted daemon needs the same grace period a first start gets: it
+        // has to bind its socket before it can answer. Probing once here would
+        // report failure for a daemon that is merely still starting.
+        const ready = await supervisor.awaitReady(probeDaemon)
         if (ready) {
           client.invalidate()
           logger?.info?.('agentjail: policy reloaded by restarting the managed daemon')
@@ -556,22 +578,31 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     )
   }
 
-  // The dashboard is registered only when a web server is composed. A headless
-  // deployment, the CLI, and the desktop app have none, and that is not an
-  // error: the enforcement path does not depend on any of this.
+  // The dashboard data routes are registered only when a web server is
+  // composed. A headless deployment, the CLI, and the desktop app have none,
+  // and that is not an error: the enforcement path does not depend on any of
+  // this. The section itself is contributed by the browser half through the
+  // client slot system; the Host only supplies its data and the small global
+  // row that tells it where that data lives.
   if (config.ui.enabled) {
     const webServer = ctx.get('webServer') as WebServerLike | undefined
     if (webServer === undefined) {
-      logger?.info?.('agentjail: no web server is composed; the security dashboard is not served')
+      logger?.info?.('agentjail: no web server is composed; the security panel is not served')
     } else {
       const disposeRoutes = registerDashboardRoutes(webServer, {
         basePath: config.ui.basePath,
         collect: () => collectDashboard(),
-        refreshMs: config.ui.refreshMs,
         recordLimit: config.ui.recordLimit,
       })
       ctx.effect(() => disposeRoutes)
-      logger?.info?.('agentjail: security dashboard served at %s', config.ui.basePath)
+      ctx.on('webserver/index-inject', (table) => {
+        table.push({
+          kind: 'global',
+          name: '__AGENTJAIL_UI__',
+          value: { basePath: config.ui.basePath, refreshMs: config.ui.refreshMs },
+        })
+      })
+      logger?.info?.('agentjail: security panel data served at %s', config.ui.basePath)
     }
   }
 

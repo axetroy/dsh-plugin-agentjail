@@ -331,30 +331,33 @@ downloaded binary is installed.
 Defaults `120000` and `67108864` (64 MiB). The download budget and the largest
 archive the plugin will accept. A larger body is refused before it is hashed.
 
-## Dashboard
+## Settings panel
 
-These fields control the HTTP surface. The routes, the response shapes, and the
-read-only guarantee are in [`UI.md`](./UI.md).
+These fields control the data routes that feed the AgentJail Settings section. The
+section itself is contributed by the plugin's browser half through the client slot
+system and is not governed by these fields. The routes, the response shapes, and
+the read-only guarantee are in [`UI.md`](./UI.md).
 
 ### `ui.enabled`
 
-Default `true`. Registers the dashboard routes when a Harness web server is
-composed. With no web server — the CLI, the desktop app — nothing is registered
-and this field has no effect.
+Default `true`. Registers the data routes when a Harness web server is composed.
+With no web server — the CLI, the desktop app — nothing is registered, the section
+shows a read error, and this field has no effect.
 
 ### `ui.basePath`
 
-Default `/agentjail`. The path the dashboard and its JSON endpoints are served
-from.
+Default `/agentjail`. The path the summary, decisions, and health endpoints are
+served from. The Host advertises it to the section, so the panel follows a change
+without a rebuild.
 
 ### `ui.refreshMs`
 
-Default `5000`. The browser page's self-refresh interval. `0` disables it; the
-JSON endpoints are unaffected either way.
+Default `5000`. The section's poll interval while it is mounted. `0` disables the
+timer, leaving the Refresh button; the JSON endpoints are unaffected either way.
 
 ### `ui.recordLimit`
 
-Default `200`. How many audit records the page and the summary endpoint carry.
+Default `200`. How many audit records the panel and the summary endpoint carry.
 `/agentjail/api/decisions` accepts a higher `limit` up to 1000.
 
 ## Environment variables

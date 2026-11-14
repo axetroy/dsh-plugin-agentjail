@@ -183,11 +183,34 @@ async function fetchBytes(url: string, timeoutMs: number, maxBytes: number): Pro
 }
 
 /**
+ * List the member paths in a gzipped tar archive.
+ *
+ * Listing is done through the system `tar`, which is the only extraction
+ * dependency this module has.
+ * @param archive - path to the `.tar.gz` file.
+ * @returns the member paths, directory entries excluded.
+ */
+async function listArchiveMembers(archive: string): Promise<string[]> {
+  const { stdout } = await execFileAsync('tar', ['-tzf', archive])
+  return stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.endsWith('/'))
+}
+
+/**
  * Extract one member from a gzipped tar archive.
  *
  * The extraction runs through the system `tar`, which is present on every
  * supported platform. Only the requested member is written, and it is written
  * into a directory created for this install.
+ *
+ * The member is located by listing the archive first rather than by handing
+ * `tar` a wildcard. GNU tar needs `--wildcards` to expand a pattern and BSD tar
+ * rejects that flag as unknown, so a wildcard fallback works on Linux and fails
+ * on macOS — which is exactly the platform this plugin vendors a Darwin build
+ * for. Listing and then extracting an exact path uses only `-t` and `-x`, which
+ * both implementations support.
  * @param archive - path to the `.tar.gz` file.
  * @param member - the member to extract, or the basename to match anywhere.
  * @param destination - directory to extract into.
@@ -199,27 +222,17 @@ export async function extractMember(
   destination: string,
 ): Promise<string> {
   const target = join(destination, member)
-  try {
-    await execFileAsync('tar', ['-xzf', archive, '-C', destination, member])
-  } catch (error) {
-    // The release archives nest the binary under a directory, so fall back to a
-    // name match that ignores the leading path.
-    try {
-      await execFileAsync('tar', [
-        '-xzf',
-        archive,
-        '-C',
-        destination,
-        '--strip-components=1',
-        '--wildcards',
-        `*/${member}`,
-      ])
-    } catch {
-      throw new Error(
-        `archive does not contain ${member}: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
+  const names = await listArchiveMembers(archive)
+  const located =
+    names.find((name) => name === member) ?? names.find((name) => name.split('/').pop() === member)
+  if (located === undefined) {
+    throw new Error(`archive does not contain ${member}`)
   }
+  // A nested member is stripped down to its basename so it lands at
+  // `destination/<member>`, which is where the caller looks for it.
+  const depth = located.split('/').length - 1
+  const strip = depth > 0 ? [`--strip-components=${depth}`] : []
+  await execFileAsync('tar', ['-xzf', archive, '-C', destination, ...strip, located])
   if (!existsSync(target)) {
     throw new Error(`archive did not produce ${target}`)
   }

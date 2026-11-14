@@ -15,12 +15,19 @@ concurrency:
 
 jobs:
   verify:
-    name: verify (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: verify (node ${{ matrix.node }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         node: ['22', '24']
+        exclude:
+          # macOS is where the vendored build, `tar --wildcards`, and the
+          # detached-process signalling first run on a second platform, so it
+          # earns one job. The Node matrix stays on Linux, where it is cheap.
+          - os: macos-latest
+            node: '24'
     steps:
       - uses: actions/checkout@v7
 
@@ -41,22 +48,49 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Before the tests: the bundle tests evaluate lib/client.js, and
+      # check-exports.mjs loads the built entry point.
+      - name: Build
+        run: npm run build
+
       - name: Test
         run: npm run test:coverage
 
       - name: Upload coverage
-        if: matrix.node == '22'
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22'
         uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage/
           retention-days: 7
 
-      - name: Build
-        run: npm run build
-
       - name: Verify the built package loads
         run: node scripts/check-exports.mjs
+
+  # The vendored build is fetched, checksum-verified, and unpacked per platform,
+  # so macOS has to prove the whole path end to end: the Darwin archive is real,
+  # `tar` is the system one, and the extracted binary runs.
+  vendored-macos:
+    name: vendored daemon (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Vendor the pinned AgentJail build
+        run: npm run vendor
+
+      - name: Verify the vendored build is present
+        run: npm run vendor:check
+
+      - name: Run the real-daemon end-to-end tests
+        run: npm run build && AGENTJAIL_E2E=1 npx vitest run tests/integration/real-daemon.test.ts
 
   policy:
     name: policy templates (real OPA)

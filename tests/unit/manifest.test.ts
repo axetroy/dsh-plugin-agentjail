@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { ENTRYPOINT_FILE, POLICY_TEMPLATES } from '../../src/security/policy.js'
+import { SUPPORTED_PLATFORM_NAMES } from '../../src/adapter/runtime.js'
 
 const root = process.cwd()
 const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
@@ -12,6 +13,8 @@ const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
   files: string[]
   exports: Record<string, { types?: string; default?: string }>
   engines: Record<string, string>
+  os?: string[]
+  cpu?: string[]
   dsh?: { bundle?: { patch?: string } }
   peerDependencies: Record<string, string>
   dependencies: Record<string, string>
@@ -82,6 +85,55 @@ describe('package manifest', () => {
     const license = readFileSync(resolve(root, 'LICENSE'), 'utf8')
     expect(license).toContain('Apache License')
     expect(license).toContain('Version 2.0')
+  })
+})
+
+describe('browser half', () => {
+  const dsh = manifest.dsh as {
+    bundle?: { patch?: string }
+    client?: { platform?: string; inject?: string[] }
+  }
+
+  it('declares a web client half, so the section reaches the Harness UI', () => {
+    expect(dsh.client?.platform).toBe('web')
+  })
+
+  it('injects the settings domain before registering into its slot', () => {
+    // Without the declaration the registration races the settings shell and the
+    // section can be dropped; the inject list is what serializes them.
+    expect(dsh.client?.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
+  })
+
+  it('exposes the client entry the module system loads', () => {
+    const entry = manifest.exports['./client']
+    expect(entry?.default).toBe('./lib/client.js')
+    expect(typeof entry?.types).toBe('string')
+  })
+
+  it('registers into settings.section and nothing else', () => {
+    const source = readFileSync(resolve(root, 'src/client/face.ts'), 'utf8')
+    expect(source).toContain("'settings.section'")
+  })
+
+  it('releases the registration through an effect, so unload removes the section', () => {
+    const source = readFileSync(resolve(root, 'src/client/face.ts'), 'utf8')
+    const effect = source.indexOf('ctx.effect(')
+    const inject = source.indexOf('ctx.slots.inject(')
+    expect(effect).toBeGreaterThan(-1)
+    expect(inject).toBeGreaterThan(effect)
+  })
+
+  it('fails the build when the client bundle loses its registration', () => {
+    const check = readFileSync(resolve(root, 'scripts/check-exports.mjs'), 'utf8')
+    expect(check).toContain('lib/client.js')
+    expect(check).toContain('window.__ModuleLoader__.load(')
+  })
+
+  it('keeps the shared page packages external, so React is not bundled twice', () => {
+    const script = readFileSync(resolve(root, 'scripts/build-client.mjs'), 'utf8')
+    for (const shared of ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives']) {
+      expect(script).toContain(`'${shared}'`)
+    }
   })
 })
 
@@ -303,6 +355,52 @@ describe('vendored build', () => {
     const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
     expect(ci).toContain('AGENTJAIL_E2E=1')
     expect(ci).toContain('npm run vendor')
+  })
+})
+
+describe('platform support', () => {
+  it('refuses an unsupported platform at install time, not silently at runtime', () => {
+    // Without `os`, npm installs the package on Windows and the failure only
+    // surfaces later as an engine that can never be reached.
+    expect(manifest.os).toEqual(['linux', 'darwin'])
+    expect(manifest.cpu).toEqual(['x64', 'arm64'])
+  })
+
+  it('claims exactly the platforms it vendors a build for', () => {
+    const lock = JSON.parse(readFileSync(resolve(root, 'vendor.lock.json'), 'utf8')) as {
+      targets: Record<string, unknown>
+    }
+    const fromLock = new Set(
+      Object.keys(lock.targets).map((target) => target.split('-')[0] as string),
+    )
+    expect([...(manifest.os ?? [])].sort()).toEqual([...fromLock].sort())
+  })
+
+  it('claims exactly the platforms the runtime calls supported', () => {
+    // Three places name the platform set: the manifest, the vendored lock, and
+    // `SUPPORTED_PLATFORMS`. The first two are checked above; this closes the
+    // loop, so a platform cannot be dropped from one and left in another.
+    expect([...(manifest.os ?? [])].sort()).toEqual([...SUPPORTED_PLATFORM_NAMES].sort())
+  })
+
+  it('runs the test suite on macOS, so a claimed platform is a tested one', () => {
+    const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
+    expect(ci).toMatch(/os:\s*\[ubuntu-latest,\s*macos-latest\]/)
+    expect(ci).toMatch(/runs-on:\s*\$\{\{\s*matrix\.os\s*\}\}/)
+  })
+
+  it('vendors and exercises the real macOS binary, not just its Linux sibling', () => {
+    const ci = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8')
+    const macos = ci.slice(ci.indexOf('vendored-macos:'))
+    expect(macos).toContain('runs-on: macos-latest')
+    expect(macos).toContain('npm run vendor')
+    expect(macos).toContain('AGENTJAIL_E2E=1')
+  })
+
+  it('tells the operator why an unsupported platform denies every call', () => {
+    const source = readFileSync(resolve(root, 'src/index.ts'), 'utf8')
+    expect(source).toContain('unsupportedPlatformReason')
+    expect(source).toMatch(/logger\?\.warn\?\.\('agentjail: %s'/)
   })
 })
 

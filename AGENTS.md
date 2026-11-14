@@ -13,8 +13,9 @@ daemon — before the tool body runs. The design white paper is `DESIGN.md`
 
 ```sh
 npm ci
-npm run verify          # format:check + lint + typecheck + test + build
-npm run build           # tsdown → lib/  (.js + .d.ts, ESM)
+npm run verify          # format:check + lint + typecheck + build + test
+npm run build           # tsdown → lib/  (.js + .d.ts, ESM) + lib/client.js
+npm run build:client    # client types + the browser bundle only
 npm run test            # vitest, unit + integration
 npm run test:coverage
 npm run lint:fix
@@ -56,7 +57,8 @@ a security regression, not a style disagreement.
 | `src/adapter/control.ts`        | daemon control-plane socket: token read and policy reload               |
 | `src/adapter/supervisor.ts`     | locate and start a daemon; never adopts or stops a foreign one          |
 | `src/adapter/installer.ts`      | opt-in managed download with SHA-256 verification                       |
-| `src/ui/`                       | read-only dashboard rendering and its HTTP routes                       |
+| `src/ui/`                       | read-only panel data: text rendering and its HTTP routes                |
+| `src/client/`                   | the browser half: the settings section and its data face                |
 | `src/audit/`, `src/governance/` | audit trail, metrics, reports                                           |
 | `src/config/schema.ts`          | Schemastery config; `Config` interface + schema export                  |
 | `policy/`                       | Generated Rego bundle (see below)                                       |
@@ -109,9 +111,16 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/tmp"}' \
   the managed installer is tested against a real local HTTP server serving a real
   `tar.gz`. Both paths fail closed, so the negative cases (digest mismatch,
   missing manifest entry, no binary found) carry the weight.
-- `tests/integration/ui-and-supervision.test.ts` covers the dashboard routes and
-  daemon supervision end to end. Its supervision cases spawn a stand-in shell
+- `tests/integration/ui-and-supervision.test.ts` covers the panel's data routes
+  and daemon supervision end to end. Its supervision cases spawn a stand-in shell
   script, so assert that no child outlives the test.
+- The browser half is tested without a browser. `tests/unit/client-face.test.ts`
+  drives the real transport over a stubbed `fetch` and the real slot registration
+  against a stand-in slot service; `tests/unit/client-section.test.tsx` renders the
+  real component in jsdom with a stubbed `fetch`. The only stand-in is
+  `@deepseek-ai/dsh-client-ui-primitives`, aliased in `vitest.config.ts` because
+  the real package ships CSS modules that Node cannot import; `tsc` still checks
+  the published declarations, so a props change fails the build.
 
 ## Documentation is bilingual
 
@@ -123,9 +132,9 @@ floor. When you change one, change the other in the same commit.
 
 `DESIGN.md` is the Chinese white paper and is the source of record for the
 design; `docs/` is English only. `docs/INSTALL.md` (daemon supervision and the
-managed download) and `docs/UI.md` (the dashboard and the `agentjail` service)
-are the two operational documents a change to `src/ui/` or `src/adapter/` should
-keep current.
+managed download) and `docs/UI.md` (the settings panel, its data routes, and the
+`agentjail` service) are the two operational documents a change to `src/ui/`,
+`src/client/`, or `src/adapter/` should keep current.
 
 ## Formatting
 
@@ -188,6 +197,28 @@ vendored build, `PATH`, then the managed download directory. The vendored build 
 the default, not a last resort — a missing `vendor/` (a git checkout rather than a
 published package) falls through to `PATH` rather than failing.
 
+**Supported platforms are Linux and macOS on `x64`/`arm64`, and that is enforced
+in three places.** Upstream publishes no Windows build, and the daemon speaks only
+over a Unix domain socket with no stdio transport, so Windows has no engine to run
+and no transport to run it over. `package.json` declares `os` and `cpu`, so npm
+refuses an unsupported platform at install time;
+`unsupportedPlatformReason()` in `src/adapter/runtime.ts` is logged as a warning
+at plugin load on any platform outside the set, so a fail-closed denial is
+explained rather than silent; and CI runs both the suite and the real vendored
+binary on macOS, so a claimed platform is a tested one. Do not add a platform to
+`SUPPORTED_PLATFORMS` without a vendored target in `vendor.lock.json` and a CI
+job that exercises it.
+
+**Two portability traps bit the macOS job and are now guarded.** Shelling out to
+`tar` must stay within the flags both implementations share: GNU tar needs
+`--wildcards` to expand a member pattern and BSD tar rejects the flag as unknown,
+so `extractMember()` lists the archive and extracts an exact path using only
+`-t`, `-x`, and `--strip-components`. And a Unix socket path is capped by
+`sun_path`, which is 104 bytes on macOS against 108 on Linux, so a control socket
+under a deep `HOME` can bind on Linux and fail with `EINVAL` on macOS; the
+readiness wait polls rather than probing once, so a daemon that is merely slow to
+bind is not reported as unreachable.
+
 ## Packaging
 
 `package.json` declares `dsh.bundle.patch` and `engines.dsh`, which is what makes
@@ -196,7 +227,16 @@ than install a plain dependency. `scripts/check-bundle.mjs` checks both in CI.
 
 The bundle patch `cordis.patch.yml` references the plugin by package name and by
 row id `agentjail` (matching the exported `name`). `scripts/check-exports.mjs`
-cross-checks that.
+cross-checks that, and also checks the browser bundle: that `lib/client.js`
+registers on `window.__ModuleLoader__`, carries the package name, contributes
+`settings.section`, and resolves React and the shared UI packages from the page's
+module table rather than inlining a second copy.
+
+`dsh.client` declares the browser half: `platform: web`, and an `inject` list
+naming `@deepseek-ai/dsh-client-ui-settings`. The inject list is not cosmetic —
+it is what stops the section registration from racing the settings shell that owns
+the slot. `src/client/face.ts` holds the registration and the transport, so both
+are testable in Node; `src/client/AgentJailSection.tsx` holds only the render.
 
 ## Releasing
 

@@ -16,6 +16,7 @@ import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { ToolsService, defineTool } from '@deepseek-ai/dsh-tools'
 import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { apply } from '../../src/index.js'
+import { resolveRuntimePaths } from '../../src/adapter/runtime.js'
 import { Config } from '../../src/config/schema.js'
 import { FakeDaemon, unusedSocketPath } from '../helpers/fake-daemon.js'
 
@@ -24,6 +25,42 @@ const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
+
+/**
+ * A daemon stand-in that answers control pings and policy requests but binds its
+ * socket only after `delayMs`, and never creates the privileged control socket.
+ *
+ * The delay is what makes it useful: it reproduces a daemon that is slow to
+ * become ready, so a readiness check that probes once and gives up fails while
+ * one that polls succeeds.
+ * @param delayMs - how long to wait before binding the socket.
+ * @returns the script body, to be written to an executable file.
+ */
+function delayedBindDaemonScript(delayMs: number): string {
+  return `#!/usr/bin/env node
+const net = require('node:net')
+const args = process.argv.slice(2)
+if (args.includes('version')) {
+  process.stdout.write('agentjail v1.8.2\\n')
+  process.exit(0)
+}
+const socketIndex = args.indexOf('--socket')
+const socketPath = socketIndex === -1 ? '' : args[socketIndex + 1]
+const reply = JSON.stringify({ ok: true, action: 'allow', rule_id: 'allow', version: 'v1.8.2' }) + '\\n'
+setTimeout(() => {
+  require('node:fs').mkdirSync(require('node:path').dirname(socketPath), { recursive: true })
+  // Upstream's Go daemon removes a stale socket before binding; a restart that
+  // left the old socket file behind would otherwise fail with EADDRINUSE.
+  require('node:fs').rmSync(socketPath, { force: true })
+  const server = net.createServer((socket) => {
+    socket.on('data', () => socket.write(reply))
+  })
+  server.on('error', () => process.exit(3))
+  server.listen(socketPath)
+  process.on('SIGTERM', () => process.exit(0))
+}, ${delayMs})
+`
+}
 
 /** A web server stand-in that records the routes the plugin registers. */
 function fakeWebServer() {
@@ -251,6 +288,36 @@ describe('daemon supervision', () => {
     const outcome = await root.agentjail?.ensureDaemon()
     expect(outcome?.state).toBe('disabled')
     expect(root.agentjail?.supervision()).toBe('disabled')
+  })
+
+  it('reloads policy by restarting a managed daemon whose control plane is unreachable', async () => {
+    // The daemon binds its socket only after a delay, and it never creates the
+    // privileged control socket. Reload therefore cannot reach the control
+    // plane and must fall back to a restart. The restarted daemon needs the
+    // same grace period as a first start: a single probe fired the instant the
+    // child is spawned would report failure for a daemon that is merely still
+    // binding, so the fallback must poll until it answers.
+    const stateDir = await mkdtemp(join(tmpdir(), 'agentjail-reload-'))
+    cleanups.push(() => rm(stateDir, { recursive: true, force: true }))
+    const binary = join(stateDir, 'agentjail')
+    await writeFile(binary, delayedBindDaemonScript(500))
+    await chmod(binary, 0o755)
+    const { root } = await mount({
+      config: {
+        socketPath: resolveRuntimePaths(stateDir).socketPath,
+        daemon: {
+          binary,
+          supervise: true,
+          stateDir,
+          startTimeoutMs: 6000,
+          pollIntervalMs: 50,
+        },
+      },
+    })
+    expect((await root.agentjail?.ensureDaemon())?.state).toBe('started')
+
+    const result = await root.agentjail?.reloadPolicy()
+    expect(result?.ok).toBe(true)
   })
 
   it('leaves the enforcement path working when supervision cannot find a binary', async () => {

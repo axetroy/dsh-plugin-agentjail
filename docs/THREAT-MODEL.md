@@ -90,7 +90,7 @@ user --trusts--> policy author --writes--> Rego --evaluated by--> OPA
 
 agent --untrusted--> tool call --> plugin --> verdict
 
-reader --untrusted--> dashboard route --> already-redacted state
+reader --untrusted--> panel data route --> already-redacted state
 plugin --trusts--> agentjail binary --> started as a child process
 ```
 
@@ -101,10 +101,11 @@ path has its own tests and a review requirement.
 Two boundaries were added after the first release, and neither is on the
 enforcement path:
 
-- **The dashboard** reads state the enforcement path already produced. It has no
-  write path, so a reader who reaches it can learn what happened but cannot change
-  what will happen. It is still a reader of session ids, tool names, and redacted
-  arguments, so bind the web server to loopback and treat the port as sensitive.
+- **The Settings panel** reads state the enforcement path already produced. It has
+  no write path, so a reader who reaches its data routes can learn what happened
+  but cannot change what will happen. It is still a reader of session ids, tool
+  names, and redacted arguments, so bind the web server to loopback and treat the
+  port as sensitive.
 - **The supervised daemon** is a child process the plugin starts from a binary it
   located. The binary is trusted to be AgentJail. A `PATH` entry an attacker can
   write is a way to substitute it, which is why `daemon.binary` is authoritative
@@ -148,7 +149,7 @@ In rough order of severity:
 6. A permissive `override` that outranks the engine for a broad scope.
 7. `daemon.binary` left empty on a machine where an untrusted directory precedes
    the real `agentjail` on `PATH` - the plugin starts whatever it finds first.
-8. The web server bound to a non-loopback address - the dashboard is
+8. The web server bound to a non-loopback address - the panel's data routes are
    unauthenticated by construction and readable by anyone who reaches the port.
 
 Each of these is a legitimate setting in a specific situation. None is a

@@ -443,7 +443,7 @@ export class DaemonSupervisor {
    * @param probe - the liveness check.
    * @returns whether the daemon answered in time.
    */
-  private async awaitReady(probe: () => Promise<boolean>): Promise<boolean> {
+  async awaitReady(probe: () => Promise<boolean>): Promise<boolean> {
     const deadline = Date.now() + this.options.startTimeoutMs
     const interval = Math.max(this.options.pollIntervalMs, 1)
     while (Date.now() < deadline) {
