@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-agentjail",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "DeepSeek Harness security plugin that routes every agent tool call through AgentJail policy checks before execution.",
   "type": "module",
   "license": "Apache-2.0",
