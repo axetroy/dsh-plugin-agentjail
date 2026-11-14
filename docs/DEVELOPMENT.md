@@ -100,11 +100,16 @@ reload can serve the previous bundle.
 
 The plugin works with no daemon — it fails closed and says so — but a real engine
 is what you want while writing policy. The published package ships a vendored
-build, so you can point the plugin at the checkout's own copy:
+build, so you can point the plugin at the checkout's own copy. `npm run vendor`
+fetches the build for the machine you are on, so the path matches your platform:
 
 ```sh
 ./vendor/linux-amd64/agentjail daemon --socket /tmp/agentjail-dev.sock
 ```
+
+On macOS the directory is `vendor/darwin-arm64` or `vendor/darwin-amd64` instead.
+Development is Linux or macOS; the plugin has no Windows path (see
+`docs/INSTALL.md`).
 
 Or, with an `agentjail` on `PATH`:
 

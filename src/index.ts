@@ -50,7 +50,12 @@ import {
   type SupervisionState,
 } from './adapter/supervisor.js'
 import { installManagedBinary } from './adapter/installer.js'
-import { currentPackageRoot, resolveRuntimePaths, vendoredDirectory } from './adapter/runtime.js'
+import {
+  currentPackageRoot,
+  resolveRuntimePaths,
+  unsupportedPlatformReason,
+  vendoredDirectory,
+} from './adapter/runtime.js'
 import { controlPlanePaths, reloadViaControlPlane } from './adapter/control.js'
 import { registerDashboardRoutes, type WebServerLike } from './ui/routes.js'
 import { renderDashboardText, type DashboardData } from './ui/dashboard.js'
@@ -219,6 +224,16 @@ export interface ApplyOptions {
 export function apply(ctx: Context, config: Config, options: ApplyOptions = {}): void {
   const logger = ctx.logger
   const alerts: DecisionAlert[] = []
+
+  // A platform with no vendored build has no engine at all, so every protected
+  // call will be denied. That outcome is correct — fail closed — but it must not
+  // be silent: an operator who installed the plugin on an unsupported platform
+  // should see why in the log rather than infer it from a wall of denials.
+  const platformReason = unsupportedPlatformReason(process.platform, process.arch)
+  if (platformReason !== undefined) {
+    logger?.warn?.('agentjail: %s', platformReason)
+  }
+
   const emitAlert = (alert: DecisionAlert): void => {
     // `governance.alertsEnabled` gates the whole alert surface. Enforcement and
     // the audit trail are unaffected: turning alerts off silences a signal, it

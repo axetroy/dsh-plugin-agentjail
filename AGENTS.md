@@ -197,6 +197,18 @@ vendored build, `PATH`, then the managed download directory. The vendored build 
 the default, not a last resort — a missing `vendor/` (a git checkout rather than a
 published package) falls through to `PATH` rather than failing.
 
+**Supported platforms are Linux and macOS on `x64`/`arm64`, and that is enforced
+in three places.** Upstream publishes no Windows build, and the daemon speaks only
+over a Unix domain socket with no stdio transport, so Windows has no engine to run
+and no transport to run it over. `package.json` declares `os` and `cpu`, so npm
+refuses an unsupported platform at install time;
+`unsupportedPlatformReason()` in `src/adapter/runtime.ts` is logged as a warning
+at plugin load on any platform outside the set, so a fail-closed denial is
+explained rather than silent; and CI runs both the suite and the real vendored
+binary on macOS, so a claimed platform is a tested one. Do not add a platform to
+`SUPPORTED_PLATFORMS` without a vendored target in `vendor.lock.json` and a CI
+job that exercises it.
+
 ## Packaging
 
 `package.json` declares `dsh.bundle.patch` and `engines.dsh`, which is what makes

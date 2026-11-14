@@ -31,16 +31,25 @@ interface Harness {
   executed: string[]
 }
 
+/** One line the plugin logged, flattened from the Cordis logger args. */
+interface LogLine {
+  level: number
+  text: string
+}
+
 /**
  * Mount the real Harness pipeline with the plugin installed.
  * @param configOverrides - plugin configuration overrides.
  * @param daemonReply - the verdict the fake daemon returns.
+ * @param providedDaemon - an already-listening daemon to reuse.
+ * @param logs - a sink that receives every line the plugin logs.
  * @returns the harness, with a record of tool bodies that actually ran.
  */
 async function harness(
   configOverrides: Record<string, unknown> = {},
   daemonReply: Record<string, unknown> = { action: 'allow' },
   providedDaemon?: FakeDaemon,
+  logs?: LogLine[],
 ): Promise<Harness> {
   const daemon = providedDaemon ?? new FakeDaemon()
   if (providedDaemon === undefined) await daemon.listen()
@@ -48,6 +57,21 @@ async function harness(
   cleanups.push(() => daemon.close())
 
   const root = new Context()
+  if (logs !== undefined) {
+    // Cordis formats lazily, so the args are captured verbatim rather than as a
+    // rendered string; the tests join them so a `%s` placeholder cannot hide the
+    // value that was substituted into it.
+    root.logger.exporter({
+      colors: 0,
+      export: (data) => {
+        const args = (data as { args?: unknown[] }).args ?? []
+        logs.push({
+          level: (data as { level?: number }).level ?? 0,
+          text: args.map((value) => String(value)).join(' '),
+        })
+      },
+    })
+  }
   root.plugin(SystemPrompt)
   root.plugin(NativeExecutor)
   root.plugin(ToolsService)
@@ -329,6 +353,85 @@ describe('plugin mounted on the real Harness pipeline', () => {
     expect(typeof service?.report).toBe('function')
     expect(service?.listGrants()).toEqual([])
     expect(service?.alerts()).toEqual([])
+  })
+})
+
+describe('unsupported platform', () => {
+  /** Run `body` with `process.platform`/`process.arch` replaced. */
+  async function asPlatform(platform: string, arch: string, body: () => Promise<void>) {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
+    const realArch = Object.getOwnPropertyDescriptor(process, 'arch')
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    Object.defineProperty(process, 'arch', { value: arch, configurable: true })
+    try {
+      await body()
+    } finally {
+      if (realPlatform) Object.defineProperty(process, 'platform', realPlatform)
+      if (realArch) Object.defineProperty(process, 'arch', realArch)
+    }
+  }
+
+  it('warns with the platform name instead of failing silently', async () => {
+    const logs: LogLine[] = []
+    await asPlatform('win32', 'x64', async () => {
+      await harness({}, { action: 'allow' }, undefined, logs)
+    })
+    const warning = logs.find((line) => line.text.includes('not supported'))
+    expect(warning).toBeDefined()
+    expect(warning?.text).toContain('win32')
+    expect(warning?.text).toContain('linux')
+    expect(warning?.text).toContain('darwin')
+  })
+
+  it('stays quiet on a platform it supports', async () => {
+    const logs: LogLine[] = []
+    await asPlatform('linux', 'x64', async () => {
+      await harness({}, { action: 'allow' }, undefined, logs)
+    })
+    expect(logs.some((line) => line.text.includes('not supported'))).toBe(false)
+  })
+
+  it('warns but does not change verdicts, so an explicit daemon still governs', async () => {
+    let executed: string[] = []
+    let text = ''
+    await asPlatform('win32', 'x64', async () => {
+      // `socketPath` is configured explicitly, so a daemon that answers is still
+      // consulted. The warning is informational: it reports the missing vendored
+      // build, it does not overrule a reachable engine.
+      const { root, executed: ran } = await harness(
+        {},
+        { action: 'allow', rule_id: 'read-only/read' },
+      )
+      executed = ran
+      text = resultText(await callTool(root, 'bash', { command: 'ls' }))
+    })
+    expect(executed).toEqual(['ls'])
+    expect(text).toContain('ran: ls')
+  })
+
+  it('still denies when no engine answers, so the warning never widens access', async () => {
+    let executed: string[] = []
+    let text = ''
+    await asPlatform('win32', 'x64', async () => {
+      const daemon = new FakeDaemon()
+      await daemon.listen()
+      const path = daemon.socketPath
+      await daemon.close()
+      const { root, executed: ran } = await harness({ socketPath: path, timeoutMs: 300 })
+      executed = ran
+      text = resultText(await callTool(root, 'bash', { command: 'ls' }))
+    })
+    expect(executed).toEqual([])
+    expect(text).toContain('AGENTJAIL_DAEMON_UNAVAILABLE')
+  })
+
+  it('reports the unsupported architecture when only the architecture is unknown', async () => {
+    const logs: LogLine[] = []
+    await asPlatform('linux', 'ia32', async () => {
+      await harness({}, { action: 'allow' }, undefined, logs)
+    })
+    const warning = logs.find((line) => line.text.includes('not supported'))
+    expect(warning?.text).toContain('ia32')
   })
 })
 

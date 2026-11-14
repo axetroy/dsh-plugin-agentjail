@@ -105,4 +105,9 @@ describe('localized READMEs', () => {
     expect(english).toContain(`Node.js \`>=${floor}\``)
     expect(chinese).toContain(`Node.js \`>=${floor}\``)
   })
+
+  it('states the supported platforms in both languages', () => {
+    expect(english).toContain('**Windows is not supported.**')
+    expect(chinese).toContain('**不支持 Windows。**')
+  })
 })

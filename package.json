@@ -8,6 +8,14 @@
     "node": ">=22.18.0",
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
   "keywords": [
     "deepseek-harness",
     "dsh",

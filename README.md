@@ -142,6 +142,14 @@ tools.
 
 - Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
+- Linux or macOS, on `x64` or `arm64`. **Windows is not supported.** The plugin
+  runs the AgentJail daemon from a build vendored per platform, and upstream
+  publishes no Windows build; the daemon also speaks only over a Unix domain
+  socket, which Windows does not have in the form this plugin needs. On any other
+  platform the plugin still loads, logs a warning, and denies every protected
+  call — it fails closed rather than open. `package.json` declares `os` and `cpu`,
+  so an unsupported platform is refused at `npm install` instead of silently at
+  runtime.
 - Nothing else. The AgentJail engine ships with the plugin; override it with
   `daemon.binary` only if you want to.
 

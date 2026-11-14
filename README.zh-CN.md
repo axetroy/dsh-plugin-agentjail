@@ -127,6 +127,12 @@ dsh plugin --profile secure add github:axetroy/dsh-plugin-agentjail#v0.1.0
 
 - Node.js `>=22.18.0`
 - DeepSeek Harness `>=0.2.2-rc.1 <0.3.0`
+- Linux 或 macOS，架构为 `x64` 或 `arm64`。**不支持 Windows。** 插件运行的是按平台
+  随包发布的 AgentJail 构建，而上游并没有发布 Windows 构建；守护进程也只监听 Unix
+  domain socket，Windows 没有本插件所需的那种形式。在其他平台上插件仍会加载、打印
+  一条警告，并拒绝每一次受保护的调用——它是 fail-closed，而不是 fail-open。
+  `package.json` 声明了 `os` 与 `cpu`，因此不支持的平台会在 `npm install` 阶段就被
+  拒绝，而不是在运行时无声失败。
 - 别无其他。AgentJail 引擎随插件一起发布；只有在你想自己指定时，才需要用
   `daemon.binary` 覆盖它。
 

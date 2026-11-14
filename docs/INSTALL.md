@@ -4,6 +4,32 @@ The plugin enforces policy by asking a daemon. This document explains how the
 plugin finds that daemon, what it does when it cannot, and the one trust decision
 the automatic path asks you to make.
 
+## Supported platforms
+
+Linux and macOS, on `x64` or `arm64`. Those four targets are the ones upstream
+publishes release archives for, and they are the ones this package vendors a
+build for.
+
+**Windows is not supported, and neither is any platform outside those two.** Two
+independent reasons, either of which is sufficient:
+
+- Upstream publishes no Windows build. There is no `agentjail.exe` to vendor and
+  nothing for `daemon.managedInstall` to download.
+- The daemon listens only on a Unix domain socket. There is no stdio transport to
+  fall back to (`agentjail --socket stdio` does not enter stdio mode), so even a
+  hypothetical Windows binary would have nothing to connect through.
+
+The plugin's own code assumes the same ground: it signals a detached daemon with
+`process.kill(-pid, 'SIGTERM')` (a process group, which is POSIX), checks
+executability with `X_OK`, and derives its private state root from `HOME`.
+
+What happens on an unsupported platform is deliberate and worth stating plainly:
+the plugin **loads, logs a warning, and denies every protected call**. It does not
+crash and it does not fall open. `package.json` declares `os` and `cpu`, so npm
+refuses the install before that point on Windows; the runtime warning is the
+backstop for a platform npm does not know about, or for a binary that reached the
+machine some other way.
+
 ## What has to exist
 
 Nothing beyond the plugin. The published package carries the AgentJail build the
