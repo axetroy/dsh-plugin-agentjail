@@ -209,6 +209,16 @@ binary on macOS, so a claimed platform is a tested one. Do not add a platform to
 `SUPPORTED_PLATFORMS` without a vendored target in `vendor.lock.json` and a CI
 job that exercises it.
 
+**Two portability traps bit the macOS job and are now guarded.** Shelling out to
+`tar` must stay within the flags both implementations share: GNU tar needs
+`--wildcards` to expand a member pattern and BSD tar rejects the flag as unknown,
+so `extractMember()` lists the archive and extracts an exact path using only
+`-t`, `-x`, and `--strip-components`. And a Unix socket path is capped by
+`sun_path`, which is 104 bytes on macOS against 108 on Linux, so a control socket
+under a deep `HOME` can bind on Linux and fail with `EINVAL` on macOS; the
+readiness wait polls rather than probing once, so a daemon that is merely slow to
+bind is not reported as unreachable.
+
 ## Packaging
 
 `package.json` declares `dsh.bundle.patch` and `engines.dsh`, which is what makes
