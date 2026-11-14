@@ -41,6 +41,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Before the tests: the bundle tests evaluate lib/client.js, and
+      # check-exports.mjs loads the built entry point.
+      - name: Build
+        run: npm run build
+
       - name: Test
         run: npm run test:coverage
 
@@ -51,9 +56,6 @@ jobs:
           name: coverage
           path: coverage/
           retention-days: 7
-
-      - name: Build
-        run: npm run build
 
       - name: Verify the built package loads
         run: node scripts/check-exports.mjs

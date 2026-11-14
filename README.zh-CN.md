@@ -49,16 +49,19 @@ agent → 工具调用 → tools/pre-execute → DH-AgentJail → AgentJail daem
 本插件是一个 DeepSeek Harness bundle：一个携带 Cordis 配置层的 npm 包。
 
 ```sh
-# 1. 安装到某个 profile。首次使用会创建该 profile，并以
-#    @deepseek-ai/dsh-base 作为第一个 bundle。
+# 1. 创建一个带 Web UI 的 profile。直接让 `dsh plugin` 创建 profile 会得到
+#    @deepseek-ai/dsh-base，它没有 Web UI，而本插件的报告正是渲染在设置面板里。
+dsh --profile secure --from-default-profile web
+
+# 2. 安装插件。发布的包中携带了插件所测试过的 AgentJail 构建，
+#    因此安装插件就等于安装了引擎。
 dsh plugin --profile secure add dsh-plugin-agentjail
 
-# 2. 启动 harness。插件会启动它自带的 AgentJail 守护进程。
+# 3. 启动 harness。Web UI 位于 http://127.0.0.1:3080。
 dsh --profile secure
 ```
 
-无需其他步骤。发布的包中携带了插件所测试过的 AgentJail 构建，因此安装插件就等于
-安装了引擎。
+无需其他步骤。插件会启动它自带的 AgentJail 守护进程。
 
 ### 需要单独安装 AgentJail 吗？
 
@@ -159,7 +162,7 @@ dsh plugin --profile secure add github:axetroy/dsh-plugin-agentjail#v0.1.0
           binary: '' # '' → $AGENTJAIL_BIN → PATH → 托管下载
           managedInstall: false # 找不到二进制时是否下载发行版
         ui:
-          enabled: true # 存在 web server 时提供仪表盘
+          enabled: true # 存在 web server 时注册面板数据路由
           basePath: /agentjail
 ```
 
@@ -263,14 +266,43 @@ ctx.agentjail.ensureDaemon() // 没有守护进程在应答时启动一个
 
 日志轮转、保留、告警与事件响应见 [`docs/OPERATIONS.md`](./docs/OPERATIONS.md)。
 
-## 仪表盘
+## 设置面板
 
-插件做出的每一个判定都已被记录。仪表盘把这份记录在 Agent 运行期间渲染出来，运维人员
+插件做出的每一个判定都已被记录。面板把这份记录在 Agent 运行期间渲染出来，运维人员
 可以直接观察一次会话，而不必事后去读审计文件。
 
-当组合中存在 Harness web server 时（`dsh web`，默认端口 3080），它会在
-`http://127.0.0.1:3080/agentjail` 提供页面。没有 web server 时不会注册任何路由，因此
-CLI 和桌面端不受影响。
+它不是插件自己提供的页面。插件带有一份浏览器端代码，由 Harness 客户端模块系统加载，
+并通过官方的 slot 机制注册一个**设置分区**——`settings.section`，与所有内置设置页
+占用的正是同一个席位。在 Harness UI 中打开**设置**，AgentJail 分区就在那里，与
+General、Plugins 并列。它随插件一起出现和消失：卸载插件时，slot 服务返回的 disposer
+会移除该分区，且不会修改 Harness 自身的任何文件。
+
+```
+设置
+├── General
+├── AgentJail     ← 本插件：引擎、判定、审批、告警
+└── Plugins
+```
+
+该分区是只读视图：它无法放宽策略、无法清除某次拒绝、也无法改变 `failureAction`。
+除了「刷新」之外没有任何可点击项——因为一个能做到那些事的展示面，会比它所报告的关卡
+本身更大的攻击面。
+
+### 数据路由
+
+分区只是视图，因此 Host 侧只提供数据。当组合中存在 Harness web server 时
+（`dsh web`，默认端口 3080），插件会注册下面这些只读 JSON 路由。没有 web server 时
+不会注册任何路由，因此 CLI 和桌面端不受影响，面板也没有数据来源。
+
+| 接口                       | 返回内容                                       |
+| -------------------------- | ---------------------------------------------- |
+| `/agentjail/api/summary`   | 计数、健康状态、托管状态、审批、最近的记录。   |
+| `/agentjail/api/decisions` | 审计记录；可用 `?verdict=` 和 `?limit=` 过滤。 |
+| `/agentjail/api/health`    | 引擎状态、套接字、托管状态、失败姿态。         |
+| `/agentjail`               | 同一份概览的等宽文本版本，供 `curl` 使用。     |
+
+`GET /agentjail` 会做内容协商：`?format=json` 返回概览 JSON，其余一律返回文本。浏览器
+直接访问 `/agentjail` 拿到的也是文本，因为富视图现在位于「设置」中。
 
 ```
 $ curl localhost:3080/agentjail
@@ -288,20 +320,9 @@ recent decisions:
        7  2026-11-12T10:31:05.100Z  deny   bash  no-remote-execution
 ```
 
-浏览器拿到的是同一份数据的页面版本：概览磁贴、判定表格、未过期的审批，以及加载以来
-产生的告警。页面是一个自包含文档，没有外部请求、没有框架，并会按配置的间隔自动刷新。
-
-旁边还有三个 JSON 接口供脚本使用：
-
-| 接口                       | 返回内容                                       |
-| -------------------------- | ---------------------------------------------- |
-| `/agentjail/api/summary`   | 计数、健康状态、托管状态、审批、最近的记录。   |
-| `/agentjail/api/decisions` | 审计记录；可用 `?verdict=` 和 `?limit=` 过滤。 |
-| `/agentjail/api/health`    | 引擎状态、套接字、托管状态、失败姿态。         |
-
-仪表盘在设计上就是只读的。它无法放宽策略、无法清除某次拒绝、也无法改变失败姿态——因为
-一个能做到这些的展示面，会比它所报告的关卡本身更大的攻击面。同样的数据也可以通过
-`agentjail` 服务在进程内读取，[`docs/UI.md`](./docs/UI.md) 同时记录了两者。
+Host 会把路由的 base path 作为一条 `global` index 注入行告知浏览器端，因此在 profile
+中改动 `ui.basePath` 后，分区依然指向正确的接口。[`docs/UI.md`](./docs/UI.md) 记录了
+面板、路由以及客户端 slot 契约。
 
 ## 它做不到什么
 
@@ -317,17 +338,63 @@ recent decisions:
 
 ```sh
 npm ci
-npm run verify      # format、lint、typecheck、test、build
+npm run verify      # format、lint、typecheck、build、test
 ```
 
-| 命令                    | 作用                         |
-| ----------------------- | ---------------------------- |
-| `npm run build`         | 用 `tsdown` 打包到 `lib/`。  |
-| `npm run typecheck`     | `tsc --noEmit`。             |
-| `npm run lint`          | 带类型信息的 ESLint。        |
-| `npm test`              | Vitest，单元测试与集成测试。 |
-| `npm run test:coverage` | 同上，并输出覆盖率。         |
-| `npm run format`        | Prettier。                   |
+| 命令                    | 作用                             |
+| ----------------------- | -------------------------------- |
+| `npm run build`         | 先打包 Host 侧，再打包客户端侧。 |
+| `npm run build:client`  | 只重新构建 `lib/client.js`。     |
+| `npm run typecheck`     | `tsc --noEmit`。                 |
+| `npm run lint`          | 带类型信息的 ESLint。            |
+| `npm test`              | Vitest，单元测试与集成测试。     |
+| `npm run test:coverage` | 同上，并输出覆盖率。             |
+| `npm run format`        | Prettier。                       |
+
+### 本地开发
+
+完整流程见 [`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md)。简要版本：
+
+`npm run dev` 会在每次保存时重新构建 Host 侧，因此已安装本插件的 Harness 会立刻生效：
+
+```sh
+npm link            # 让本仓库可以按包名被解析
+npm run dev         # tsdown --watch，保存即重建 lib/
+```
+
+浏览器端是另一份产物。`npm run build:client` 会编译客户端类型，并把 `src/client/`
+打包为 `lib/client.js`——正是 Harness 客户端模块系统所加载的 lazy-CJS 工厂。Harness
+web server 会缓存该文件，因此改动 `src/client/` 下的任何内容后，都要重新构建并刷新
+页面。完整循环是：
+
+```sh
+npm run build:client   # tsc -p tsconfig.client.json && node scripts/build-client.mjs
+# 然后刷新 Harness UI；AgentJail 分区会在加载时重新注册
+```
+
+要针对真实的策略引擎（而非假守护进程）开发，先启动一个并让插件指向它：
+
+```sh
+agentjail daemon --socket /tmp/agentjail-dev.sock
+AGENTJAIL_SOCKET=/tmp/agentjail-dev.sock dsh --profile dev
+```
+
+单元测试是最快的反馈信号，不需要守护进程也不需要浏览器：
+
+```sh
+npx vitest run tests/unit/client-face.test.ts     # 传输与 slot 注册
+npx vitest run tests/unit/client-section.test.tsx # jsdom 中的分区
+npx vitest run tests/unit/client-bundle.test.ts   # 按加载方式验证 lib/client.js
+```
+
+浏览器端完全不需要浏览器即可测试：分区在 jsdom 中渲染，传输在打桩的 `fetch` 上运行，
+构建产物则放进替身模块表里求值，因此注册丢失或 React 被重复内联都会让测试失败。唯一
+的替身是 `@deepseek-ai/dsh-client-ui-primitives`，在 `vitest.config.ts` 中做了别名，
+因为真实包带有 Node 无法导入的 CSS modules；`tsc` 仍然按已发布的声明做类型检查，因此
+props 的变化会直接让构建失败，而不会静默通过。
+
+[`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md) 覆盖完整流程：把本仓库链接进正在运行的
+Harness、对接真实的策略引擎，以及分区不出现时应当依次检查什么。
 
 测试套件分三层，其中最重要的是集成层：它在真实的 Cordis 运行时上挂载插件，使用真实
 的 `ToolsService` 与原生执行器，注册真实工具，并断言被拒绝的调用其本体从未执行。

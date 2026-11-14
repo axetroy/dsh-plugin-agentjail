@@ -3,8 +3,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import {
   dashboardPayload,
-  escapeHtml,
-  renderDashboardHtml,
   renderDashboardText,
   type DashboardData,
 } from '../../src/ui/dashboard.js'
@@ -72,19 +70,6 @@ function data(overrides: Partial<DashboardData> = {}): DashboardData {
   }
 }
 
-describe('html escaping', () => {
-  it('escapes every character that can break out of markup', () => {
-    expect(escapeHtml(`<script>"x" & 'y'</script>`)).toBe(
-      '&lt;script&gt;&quot;x&quot; &amp; &#39;y&#39;&lt;/script&gt;',
-    )
-  })
-
-  it('stringifies non-strings without throwing', () => {
-    expect(escapeHtml(42)).toBe('42')
-    expect(escapeHtml(undefined)).toBe('undefined')
-  })
-})
-
 describe('dashboard payload', () => {
   it('flattens verdict counts and preserves the denial reason', () => {
     const payload = dashboardPayload(data()) as {
@@ -119,45 +104,8 @@ describe('dashboard payload', () => {
   })
 })
 
-describe('dashboard rendering', () => {
-  it('produces a standalone HTML document with no external requests', () => {
-    const html = renderDashboardHtml(data(), 0)
-    expect(html.startsWith('<!doctype html>')).toBe(true)
-    expect(html).toContain('AgentJail security dashboard')
-    expect(html).not.toMatch(/<script[^>]+src=/)
-    expect(html).not.toMatch(/<link[^>]+stylesheet/)
-    // No refresh script when the interval is zero.
-    expect(html).not.toContain('location.reload')
-  })
-
-  it('embeds the refresh interval when one is configured', () => {
-    expect(renderDashboardHtml(data(), 3000)).toContain('location.reload')
-  })
-
-  it('escapes record fields rather than emitting them raw', () => {
-    const hostile = data({
-      records: [
-        {
-          ...data().records[0]!,
-          toolName: '<img src=x onerror=alert(1)>',
-          reason: '</td></tr><script>alert(1)</script>',
-        },
-      ],
-    })
-    const html = renderDashboardHtml(hostile, 0)
-    expect(html).not.toContain('<img src=x')
-    expect(html).not.toContain('<script>alert(1)</script>')
-    expect(html).toContain('&lt;img src=x')
-  })
-
-  it('shows the empty state instead of an empty table', () => {
-    const html = renderDashboardHtml(data({ records: [], grants: [], alerts: [] }), 0)
-    expect(html).toContain('No decisions recorded yet.')
-    expect(html).toContain('No outstanding approvals.')
-    expect(html).toContain('No alerts.')
-  })
-
-  it('renders a fixed-width text summary', () => {
+describe('dashboard text rendering', () => {
+  it('renders a fixed-width summary', () => {
     const text = renderDashboardText(data())
     expect(text).toContain('AgentJail security dashboard')
     expect(text).toContain('engine      healthy')
@@ -165,8 +113,30 @@ describe('dashboard rendering', () => {
     expect(text).toContain('no-rm-rf')
   })
 
-  it('renders the empty state in text mode', () => {
+  it('renders the empty state instead of an empty list', () => {
     expect(renderDashboardText(data({ records: [] }))).toContain('(none)')
+  })
+
+  it('falls back to a dash when the deny rate is not finite', () => {
+    const stats = { ...data().stats, denyRate: Number.NaN }
+    expect(renderDashboardText(data({ stats }))).toContain('deny rate   —')
+  })
+
+  it('caps the recent-decision list', () => {
+    const many = Array.from({ length: 60 }, (_, index) => ({
+      ...data().records[0]!,
+      seq: index,
+      ruleId: `rule-${index}`,
+    }))
+    const text = renderDashboardText(data({ records: many }))
+    // The slice keeps the first 50, so entry 49 is the last one rendered.
+    expect(text).toContain('rule-49')
+    expect(text).not.toContain('rule-50')
+  })
+
+  it('renders the alert block when there are alerts', () => {
+    expect(renderDashboardText(data())).toContain('alerts:')
+    expect(renderDashboardText(data({ alerts: [] }))).not.toContain('alerts:')
   })
 })
 
@@ -175,18 +145,17 @@ describe('format negotiation', () => {
     ({ headers: accept === undefined ? {} : { accept } }) as IncomingMessage
 
   it('prefers an explicit format parameter', () => {
-    expect(negotiateFormat(req('text/html'), 'json')).toBe('json')
+    expect(negotiateFormat(req('text/plain'), 'json')).toBe('json')
     expect(negotiateFormat(req('application/json'), 'text')).toBe('text')
-    expect(negotiateFormat(req('application/json'), 'html')).toBe('html')
   })
 
   it('reads the Accept header when no parameter is given', () => {
     expect(negotiateFormat(req('application/json'))).toBe('json')
-    expect(negotiateFormat(req('text/html,application/xhtml+xml'))).toBe('html')
   })
 
-  it('falls back to text for a wildcard Accept header', () => {
+  it('falls back to text for a wildcard or HTML Accept header', () => {
     expect(negotiateFormat(req('*/*'))).toBe('text')
+    expect(negotiateFormat(req('text/html,application/xhtml+xml'))).toBe('text')
     expect(negotiateFormat(req())).toBe('text')
   })
 })
@@ -239,12 +208,11 @@ function fakeServer() {
 }
 
 describe('dashboard routes over HTTP', () => {
-  it('serves HTML, JSON, and text from the real server', async () => {
+  it('serves the text summary and every JSON document from the real server', async () => {
     const server = fakeServer()
     const dispose = registerDashboardRoutes(server, {
       basePath: '/agentjail',
       collect: () => data(),
-      refreshMs: 0,
       recordLimit: 200,
     })
     expect([...server.routes.keys()].sort()).toEqual([
@@ -259,13 +227,10 @@ describe('dashboard routes over HTTP', () => {
     const { port } = http.address() as AddressInfo
     const base = `http://127.0.0.1:${port}`
     try {
-      const html = await fetch(`${base}/agentjail`, { headers: { accept: 'text/html' } })
-      expect(html.status).toBe(200)
-      expect(html.headers.get('content-type')).toContain('text/html')
-      expect(await html.text()).toContain('AgentJail security dashboard')
-
       const text = await fetch(`${base}/agentjail`)
+      expect(text.status).toBe(200)
       expect(text.headers.get('content-type')).toContain('text/plain')
+      expect(await text.text()).toContain('AgentJail security dashboard')
 
       const summary = await fetch(`${base}/agentjail/api/summary`)
       const payload = (await summary.json()) as { stats: { total: number } }
@@ -284,8 +249,8 @@ describe('dashboard routes over HTTP', () => {
       expect(((await filtered.json()) as { count: number }).count).toBe(0)
 
       // Security headers are set on every response.
-      expect(html.headers.get('cache-control')).toBe('no-store')
-      expect(html.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(text.headers.get('cache-control')).toBe('no-store')
+      expect(text.headers.get('x-content-type-options')).toBe('nosniff')
     } finally {
       http.closeAllConnections?.()
       await new Promise<void>((resolve) => http.close(() => resolve()))
@@ -301,7 +266,6 @@ describe('dashboard routes over HTTP', () => {
       collect: () => {
         throw new Error('audit store is closed')
       },
-      refreshMs: 0,
       recordLimit: 10,
     })
     const http = createServer((req, res) => server.dispatch(req, res))
@@ -320,73 +284,6 @@ describe('dashboard routes over HTTP', () => {
   })
 })
 
-describe('dashboard rendering branches', () => {
-  it('tones each verdict and the unknown fallback', () => {
-    const records = (['deny', 'ask', 'allow', 'weird'] as const).map((verdict, index) => ({
-      ...data().records[0]!,
-      seq: index,
-      verdict: verdict as never,
-    }))
-    const html = renderDashboardHtml(data({ records }), 0)
-    expect(html).toContain('pill bad')
-    expect(html).toContain('pill warn')
-    expect(html).toContain('pill ok')
-    expect(html).toContain('pill muted')
-  })
-
-  it('falls back to a dash when the deny rate is not finite', () => {
-    const stats = { ...data().stats, denyRate: Number.NaN }
-    expect(renderDashboardText(data({ stats }))).toContain('deny rate   —')
-    expect(renderDashboardHtml(data({ stats }), 0)).toContain('—')
-  })
-
-  it('tones the engine and supervision tiles for the unhealthy case', () => {
-    const unhealthy = data({
-      health: { ...data().health, state: 'unavailable' },
-      supervision: 'disabled',
-    })
-    const html = renderDashboardHtml(unhealthy, 0)
-    expect(html).toContain('tile-value bad')
-    expect(html).toContain('tile-value warn')
-  })
-
-  it('uses a rule id when present and the source otherwise', () => {
-    const withRule = renderDashboardHtml(data(), 0)
-    expect(withRule).toContain('no-rm-rf')
-    const { ruleId: _omitted, ...noRule } = data().records[0]!
-    const withoutRule = renderDashboardHtml(data({ records: [noRule] }), 0)
-    expect(withoutRule).toContain('engine')
-  })
-
-  it('renders a one-time grant scope and an ask alert tone', () => {
-    const html = renderDashboardHtml(
-      data({
-        grants: [{ ...data().grants[0]!, scope: 'once' }],
-        alerts: [{ kind: 'asked', toolName: 'Bash', sessionId: 's1', message: 'needs approval' }],
-      }),
-      0,
-    )
-    expect(html).toContain('one-time')
-    expect(html).toContain('pill warn')
-  })
-
-  it('caps the recent-decision list in text mode', () => {
-    const many = Array.from({ length: 60 }, (_, index) => ({
-      ...data().records[0]!,
-      seq: index,
-      ruleId: `rule-${index}`,
-    }))
-    const text = renderDashboardText(data({ records: many }))
-    // The slice keeps the first 50, so entry 49 is the last one rendered.
-    expect(text).toContain('rule-49')
-    expect(text).not.toContain('rule-50')
-  })
-
-  it('renders the alert block in text mode', () => {
-    expect(renderDashboardText(data())).toContain('alerts')
-  })
-})
-
 describe('dashboard route error and format branches', () => {
   async function serve(
     collect: () => DashboardData,
@@ -396,7 +293,6 @@ describe('dashboard route error and format branches', () => {
     registerDashboardRoutes(server, {
       basePath: '/agentjail',
       collect,
-      refreshMs: 0,
       recordLimit: 200,
     })
     const http = createServer((req, res) => server.dispatch(req, res))
@@ -410,7 +306,7 @@ describe('dashboard route error and format branches', () => {
     }
   }
 
-  it('serves JSON and HTML when the format parameter asks for them', async () => {
+  it('serves JSON when the format parameter asks for it', async () => {
     await serve(
       () => data(),
       async (base) => {
@@ -418,14 +314,14 @@ describe('dashboard route error and format branches', () => {
         expect(json.headers.get('content-type')).toContain('application/json')
         expect(((await json.json()) as { stats: { total: number } }).stats.total).toBe(4)
 
-        const html = await fetch(`${base}/agentjail?format=html`)
-        expect(html.headers.get('content-type')).toContain('text/html')
-        expect(await html.text()).toContain('AgentJail security dashboard')
+        const text = await fetch(`${base}/agentjail?format=text`)
+        expect(text.headers.get('content-type')).toContain('text/plain')
+        expect(await text.text()).toContain('AgentJail security dashboard')
       },
     )
   })
 
-  it('answers 500 in plain text when collection throws on the HTML route', async () => {
+  it('answers 500 in plain text when collection throws on the summary route', async () => {
     await serve(
       () => {
         // Deliberately not an Error: the route must still render something
@@ -479,7 +375,6 @@ describe('dashboard route error and format branches', () => {
     const dispose = registerDashboardRoutes(throwing, {
       basePath: '/agentjail',
       collect: () => data(),
-      refreshMs: 0,
       recordLimit: 10,
     })
     expect(() => dispose()).not.toThrow()

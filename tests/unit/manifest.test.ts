@@ -85,6 +85,55 @@ describe('package manifest', () => {
   })
 })
 
+describe('browser half', () => {
+  const dsh = manifest.dsh as {
+    bundle?: { patch?: string }
+    client?: { platform?: string; inject?: string[] }
+  }
+
+  it('declares a web client half, so the section reaches the Harness UI', () => {
+    expect(dsh.client?.platform).toBe('web')
+  })
+
+  it('injects the settings domain before registering into its slot', () => {
+    // Without the declaration the registration races the settings shell and the
+    // section can be dropped; the inject list is what serializes them.
+    expect(dsh.client?.inject).toContain('@deepseek-ai/dsh-client-ui-settings')
+  })
+
+  it('exposes the client entry the module system loads', () => {
+    const entry = manifest.exports['./client']
+    expect(entry?.default).toBe('./lib/client.js')
+    expect(typeof entry?.types).toBe('string')
+  })
+
+  it('registers into settings.section and nothing else', () => {
+    const source = readFileSync(resolve(root, 'src/client/face.ts'), 'utf8')
+    expect(source).toContain("'settings.section'")
+  })
+
+  it('releases the registration through an effect, so unload removes the section', () => {
+    const source = readFileSync(resolve(root, 'src/client/face.ts'), 'utf8')
+    const effect = source.indexOf('ctx.effect(')
+    const inject = source.indexOf('ctx.slots.inject(')
+    expect(effect).toBeGreaterThan(-1)
+    expect(inject).toBeGreaterThan(effect)
+  })
+
+  it('fails the build when the client bundle loses its registration', () => {
+    const check = readFileSync(resolve(root, 'scripts/check-exports.mjs'), 'utf8')
+    expect(check).toContain('lib/client.js')
+    expect(check).toContain('window.__ModuleLoader__.load(')
+  })
+
+  it('keeps the shared page packages external, so React is not bundled twice', () => {
+    const script = readFileSync(resolve(root, 'scripts/build-client.mjs'), 'utf8')
+    for (const shared of ['react', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives']) {
+      expect(script).toContain(`'${shared}'`)
+    }
+  })
+})
+
 describe('bundle patch', () => {
   const patch = readFileSync(resolve(root, manifest.dsh?.bundle?.patch as string), 'utf8')
 

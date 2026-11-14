@@ -53,16 +53,20 @@ The plugin is a DeepSeek Harness bundle: an npm package that ships a Cordis
 configuration layer.
 
 ```sh
-# 1. Install the plugin into a profile. The first use creates the profile with
-#    @deepseek-ai/dsh-base as its first bundle.
+# 1. Create a web-UI profile. Installing into a profile `dsh plugin` creates on
+#    its own gives you @deepseek-ai/dsh-base, which has no web UI, and the
+#    Settings panel is where this plugin's report renders.
+dsh --profile secure --from-default-profile web
+
+# 2. Install the plugin. The published package carries the AgentJail build it was
+#    tested against, so installing the plugin installs the engine.
 dsh plugin --profile secure add dsh-plugin-agentjail
 
-# 2. Start the harness. The plugin starts the AgentJail daemon it ships.
+# 3. Start the harness. The web UI is on http://127.0.0.1:3080.
 dsh --profile secure
 ```
 
-Nothing else is needed. The published package carries the AgentJail build the
-plugin was tested against, so installing the plugin installs the engine.
+Nothing else is needed. The plugin starts the AgentJail daemon it ships.
 
 ### Do I need to install AgentJail separately?
 
@@ -174,7 +178,7 @@ keep.
           binary: '' # '' → $AGENTJAIL_BIN → PATH → managed download
           managedInstall: false # download a release binary when none is found
         ui:
-          enabled: true # serve the dashboard when a web server is composed
+          enabled: true # register the panel data routes on a web server
           basePath: /agentjail
 ```
 
@@ -282,15 +286,49 @@ ctx.agentjail.ensureDaemon() // start a daemon if none is answering
 `docs/OPERATIONS.md` covers rotation, retention, alerting, and incident
 response.
 
-## Dashboard
+## Settings panel
 
-Every decision the plugin makes is already recorded. The dashboard renders that
-record while the agent runs, so an operator can watch a session instead of
-reading the audit file afterwards.
+Every decision the plugin makes is already recorded. The panel renders that record
+while the agent runs, so an operator can watch a session instead of reading the
+audit file afterwards.
 
-It is served by the Harness web server when one is composed — `dsh web`, the
-default port 3080 — at `http://127.0.0.1:3080/agentjail`. Nothing is registered
-when no web server is present, so the CLI and the desktop app are unaffected.
+It is not a page the plugin serves itself. The plugin ships a browser half that
+the Harness client module system loads, and that half registers one **Settings
+section** through the official slot mechanism — `settings.section`, the same seat
+every built-in settings page occupies. Open **Settings** in the Harness UI and the
+AgentJail section is there, next to General and Plugins. It appears and disappears
+with the plugin: unloading the plugin removes the section through the disposer the
+slot service returns, and no Harness file is edited.
+
+```
+Settings
+├── General
+├── AgentJail     ← this plugin: engine, decisions, approvals, alerts
+└── Plugins
+```
+
+The section is a read-only view: it cannot widen a policy, clear a denial, or
+change `failureAction`. Nothing in it is clickable except Refresh, because a
+reporting surface that could do those things would be a larger attack surface
+than the gate it reports on.
+
+### Data routes
+
+The section is a view, so the Host supplies data only. When a Harness web server
+is composed (`dsh web`, default port 3080), the plugin registers the read-only
+JSON routes below. Nothing is registered when no web server is present, so the
+CLI and the desktop app are unaffected, and the panel simply has no data source.
+
+| Endpoint                   | Returns                                               |
+| -------------------------- | ----------------------------------------------------- |
+| `/agentjail/api/summary`   | Counts, health, supervision, approvals, recent rows.  |
+| `/agentjail/api/decisions` | Audit records; filter with `?verdict=` and `?limit=`. |
+| `/agentjail/api/health`    | Engine state, socket, supervision, failure posture.   |
+| `/agentjail`               | The same summary as fixed-width text, for `curl`.     |
+
+`GET /agentjail` is content-negotiated: `?format=json` returns the summary JSON,
+anything else returns text. A browser navigating to `/agentjail` gets the text
+too, because the rich view lives in Settings now.
 
 ```
 $ curl localhost:3080/agentjail
@@ -308,24 +346,10 @@ recent decisions:
        7  2026-11-12T10:31:05.100Z  deny   bash  no-remote-execution
 ```
 
-A browser gets the same data as a page: summary tiles, a decisions table, the
-outstanding approvals, and the alerts raised since load. The page is one
-self-contained document with no external requests and no framework, and it
-refreshes itself on the configured interval.
-
-Three JSON endpoints sit alongside it for scripts:
-
-| Endpoint                   | Returns                                               |
-| -------------------------- | ----------------------------------------------------- |
-| `/agentjail/api/summary`   | Counts, health, supervision, approvals, recent rows.  |
-| `/agentjail/api/decisions` | Audit records; filter with `?verdict=` and `?limit=`. |
-| `/agentjail/api/health`    | Engine state, socket, supervision, failure posture.   |
-
-The dashboard is read-only by construction. It cannot widen a policy, clear a
-denial, or change the failure posture, because a reporting surface that could do
-those things would be a larger attack surface than the gate it reports on. The
-same data is available in-process through the `agentjail` service, and
-`docs/UI.md` documents both.
+The Host advertises the route's base path to the browser half as a `global` index
+injection row, so moving `ui.basePath` in your profile still points the section at
+the right endpoint. `docs/UI.md` documents the panel, the routes, and the client
+slot contract.
 
 ## What this does not do
 
@@ -342,17 +366,69 @@ others, and this plugin does not replace them.
 
 ```sh
 npm ci
-npm run verify      # format, lint, typecheck, test, build
+npm run verify      # format, lint, typecheck, build, test
 ```
 
-| Command                 | What it does                    |
-| ----------------------- | ------------------------------- |
-| `npm run build`         | Bundle to `lib/` with `tsdown`. |
-| `npm run typecheck`     | `tsc --noEmit`.                 |
-| `npm run lint`          | ESLint with type-aware rules.   |
-| `npm test`              | Vitest, unit and integration.   |
-| `npm run test:coverage` | The same, with coverage.        |
-| `npm run format`        | Prettier.                       |
+| Command                 | What it does                                |
+| ----------------------- | ------------------------------------------- |
+| `npm run build`         | Bundle the Host half, then the client half. |
+| `npm run build:client`  | Rebuild `lib/client.js` alone.              |
+| `npm run typecheck`     | `tsc --noEmit`.                             |
+| `npm run lint`          | ESLint with type-aware rules.               |
+| `npm test`              | Vitest, unit and integration.               |
+| `npm run test:coverage` | The same, with coverage.                    |
+| `npm run format`        | Prettier.                                   |
+
+### Local development
+
+`docs/DEVELOPMENT.md` has the full loop. The short version:
+
+`npm run dev` rebuilds the Host half on every save, so a running Harness that has
+the plugin installed picks up each change:
+
+```sh
+npm link            # make this checkout resolvable by name
+npm run dev         # tsdown --watch, rebuilds lib/ on save
+```
+
+The browser half is a separate artifact. `npm run build:client` compiles the
+client types and bundles `src/client/` into `lib/client.js` — the lazy-CJS factory
+the Harness client module system loads. The Harness web server caches that file,
+so after changing anything under `src/client/` rebuild and reload the page. The
+whole loop is:
+
+```sh
+npm run build:client   # tsc -p tsconfig.client.json && node scripts/build-client.mjs
+# then reload the Harness UI; the AgentJail section re-registers on load
+```
+
+To work against a real policy engine rather than a fake daemon, start one and
+point the plugin at it:
+
+```sh
+agentjail daemon --socket /tmp/agentjail-dev.sock
+AGENTJAIL_SOCKET=/tmp/agentjail-dev.sock dsh --profile dev
+```
+
+The unit tests are the fastest signal. They need no daemon and no browser:
+
+```sh
+npx vitest run tests/unit/client-face.test.ts     # transport and slot registration
+npx vitest run tests/unit/client-section.test.tsx # the section, in jsdom
+npx vitest run tests/unit/client-bundle.test.ts   # the built lib/client.js, as loaded
+```
+
+The browser half is tested without a browser: the section renders in jsdom, the
+transport runs over a stubbed `fetch`, and the built bundle is evaluated in a
+stand-in module table so a lost registration or an inlined React copy fails the
+suite. The only stand-in is `@deepseek-ai/dsh-client-ui-primitives`, aliased in
+`vitest.config.ts` because the real package ships CSS modules Node cannot import;
+`tsc` still type-checks against the published declarations, so a props change
+fails the build rather than passing silently.
+
+[`docs/DEVELOPMENT.md`](./docs/DEVELOPMENT.md) covers the full loop: linking the
+checkout into a running Harness, running against a real policy engine, and what to
+check when the section does not appear.
 
 The test suite has three layers, and the integration layer is the one that
 matters: it mounts the plugin on a real Cordis runtime with the real

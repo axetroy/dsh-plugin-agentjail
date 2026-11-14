@@ -70,7 +70,7 @@ starts nothing, and it will not stop that daemon when the plugin unloads. This i
 the case for a daemon you manage yourself, whether through `agentjail install`,
 systemd, launchd, or a container entrypoint.
 
-Nothing about your daemon's lifecycle changes. The dashboard reports
+Nothing about your daemon's lifecycle changes. The Settings panel reports
 `supervision: external`. Reload is not attempted against an adopted daemon,
 because the plugin has no control token for it and reloading a daemon it does not
 own is not its business.
@@ -201,8 +201,8 @@ itself. If that is in your threat model, install AgentJail yourself and pin
 still uses a daemon that is already answering. Set this when something else owns
 the daemon's lifecycle and you do not want a second actor in it.
 
-The dashboard reports `supervision: disabled`, and an unreachable engine still
-resolves `failureAction`.
+The Settings panel reports `supervision: disabled`, and an unreachable engine
+still resolves `failureAction`.
 
 ## Verifying the setup
 

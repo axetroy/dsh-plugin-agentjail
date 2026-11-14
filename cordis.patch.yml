@@ -92,9 +92,10 @@
           downloadTimeoutMs: 120000
           maxArchiveBytes: 67108864
 
-        # The dashboard is read-only and is served only when a Harness web server
-        # is composed. It cannot widen a policy, clear a denial, or change the
-        # failure posture.
+        # The settings section is read-only and appears in the Harness Settings
+        # panel through the client slot system. It cannot widen a policy, clear a
+        # denial, or change the failure posture. `enabled: false` unloads the
+        # browser half's data routes and leaves the Host enforcement path alone.
         ui:
           enabled: true
           basePath: /agentjail

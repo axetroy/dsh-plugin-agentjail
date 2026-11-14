@@ -23,6 +23,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ToolExecution, ToolExecutionResult, PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-user-approval'
+// Type-only: pulls the `ctx.webServer` service merge and the
+// `webserver/index-inject` event into this program without requiring a web
+// server at runtime.
+import type {} from '@deepseek-ai/dsh-host-webserver'
 import { Config as ConfigSchema, type Config } from './config/schema.js'
 import { AgentJailClient, type HealthSnapshot } from './adapter/agentjail-client.js'
 import { GrantStore, type Grant } from './security/grants.js'
@@ -556,22 +560,31 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
     )
   }
 
-  // The dashboard is registered only when a web server is composed. A headless
-  // deployment, the CLI, and the desktop app have none, and that is not an
-  // error: the enforcement path does not depend on any of this.
+  // The dashboard data routes are registered only when a web server is
+  // composed. A headless deployment, the CLI, and the desktop app have none,
+  // and that is not an error: the enforcement path does not depend on any of
+  // this. The section itself is contributed by the browser half through the
+  // client slot system; the Host only supplies its data and the small global
+  // row that tells it where that data lives.
   if (config.ui.enabled) {
     const webServer = ctx.get('webServer') as WebServerLike | undefined
     if (webServer === undefined) {
-      logger?.info?.('agentjail: no web server is composed; the security dashboard is not served')
+      logger?.info?.('agentjail: no web server is composed; the security panel is not served')
     } else {
       const disposeRoutes = registerDashboardRoutes(webServer, {
         basePath: config.ui.basePath,
         collect: () => collectDashboard(),
-        refreshMs: config.ui.refreshMs,
         recordLimit: config.ui.recordLimit,
       })
       ctx.effect(() => disposeRoutes)
-      logger?.info?.('agentjail: security dashboard served at %s', config.ui.basePath)
+      ctx.on('webserver/index-inject', (table) => {
+        table.push({
+          kind: 'global',
+          name: '__AGENTJAIL_UI__',
+          value: { basePath: config.ui.basePath, refreshMs: config.ui.refreshMs },
+        })
+      })
+      logger?.info?.('agentjail: security panel data served at %s', config.ui.basePath)
     }
   }
 
