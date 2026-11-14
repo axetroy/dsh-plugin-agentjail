@@ -518,7 +518,10 @@ export function apply(ctx: Context, config: Config, options: ApplyOptions = {}):
       // The control plane was unreachable or refused. Restarting the managed
       // daemon reloads policy as a side effect of starting it.
       if (supervisor.restart() !== undefined) {
-        const ready = await probeDaemon()
+        // A restarted daemon needs the same grace period a first start gets: it
+        // has to bind its socket before it can answer. Probing once here would
+        // report failure for a daemon that is merely still starting.
+        const ready = await supervisor.awaitReady(probeDaemon)
         if (ready) {
           client.invalidate()
           logger?.info?.('agentjail: policy reloaded by restarting the managed daemon')
