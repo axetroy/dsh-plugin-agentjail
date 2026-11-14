@@ -106,7 +106,7 @@ jobs:
 
       - name: Version pull request, or publish
         if: github.event_name == 'push'
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
           version: npm run version-packages
           publish: npm run release
