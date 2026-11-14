@@ -12,6 +12,127 @@ them by hand: record a change in `.changeset/` and the "Version Packages" pull
 request writes the next section here. `0.1.0` predates changesets and keeps the
 hand-written Keep a Changelog headings.
 
+## 0.2.0
+
+### Minor Changes
+
+- 6180156: A Simplified Chinese README (`README.zh-CN.md`), with language links in both
+  directions. A test asserts the two stay structurally in sync, so a translated
+  section cannot silently fall behind the English one.
+- 6180156: Daemon supervision. When no daemon answers, the plugin starts one from the first
+  usable `agentjail` binary and stops it on unload. A daemon it did not start is
+  adopted and never signalled, so an operator-managed daemon keeps its lifecycle.
+  See `docs/INSTALL.md`.
+- 6180156: An opt-in managed download (`daemon.managedInstall`), off by default, that
+  fetches the platform release archive and verifies its published SHA-256 before
+  extracting anything. A missing manifest entry, a digest mismatch, or an oversized
+  body installs nothing. `AGENTJAIL_BIN` is read when `daemon.binary` is empty.
+- 6180156: The Node floor is `>=22.18.0`, raised from `>=20.10.0`. The `prepare` script runs
+  `tsdown` on install, and its rolldown plugin requires Node `^22.18.0`, so the
+  previous floor described a version the package could not install on. CI now tests
+  Node 22 and 24. `npm run verify` runs `format:check` first, so the local command
+  and CI run the same sequence. `package.json` gained a `publishConfig` block
+  recording `access: public` and `provenance: true`, so a manual publish matches
+  what CI produces.
+- 6180156: `ctx.agentjail.grantSession` issues a session-scoped grant so a workflow that
+  legitimately repeats one command is not prompted each time, and
+  `ctx.agentjail.reloadPolicy` asks the daemon to reload its policy and drops the
+  verdict cache with it.
+- baf75a7: A read-only security panel in the Harness Settings dialog. The plugin ships a
+  browser half that registers one `settings.section` through the client slot
+  system, so the audit trail, risk statistics, engine health, and outstanding
+  approvals appear next to General and Plugins instead of on a page the plugin
+  serves itself. The section is contributed by the client and removed by the
+  disposer when the plugin unloads.
+
+  The Host registers only the data routes the panel reads, when a Harness web
+  server is composed: `/agentjail/api/{summary,decisions,health}` as JSON, and
+  `/agentjail` as fixed-width text for `curl`. Nothing can widen a policy, clear a
+  denial, or change the failure posture. See `docs/UI.md`.
+
+- 6180156: Release publishing uses **npm trusted publishing** (OIDC) instead of a long-lived
+  `NPM_TOKEN`. The workflow requests `id-token: write`, asserts the npm CLI is
+  `>= 11.5.1` before publishing, and passes no `--provenance` flag because trusted
+  publishing generates provenance automatically. See `CONTRIBUTING.md` for the
+  one-time npm-side configuration.
+- b338b51: Vendored AgentJail binary. The published package now carries the AgentJail build
+  it was tested against, so installing the plugin is enough to get a working engine
+  with no second step. A build outside the supported window (`>=1.8.0 <2.0.0`) is
+  refused rather than started, which is what keeps an upstream release from changing
+  the engine under a plugin that was not tested against it. `daemon.binary` and
+  `AGENTJAIL_BIN` still win, so pinning your own build is unchanged.
+
+  The package also ships `agentjail-hook`. The plugin itself never runs it — it
+  talks to the daemon over the socket — but upstream's `agentjail install` aborts
+  without it next to `agentjail`, so vendoring both keeps that command working for
+  anyone using the shipped binary directly.
+
+- 6180156: Every configured verdict field is now applied. `defaultAction` governs a call the
+  engine matched no rule for (previously a no-match allow was taken at face value),
+  `askFallback` resolves an ask on every path that produces one, `enforcement` is
+  read through `isEnforcing` so an unrecognized mode fails closed, the deny-rate
+  alert from the metrics collector reaches the alert sink, and
+  `governance.alertsEnabled` gates the alert surface without touching enforcement
+  or the audit trail.
+
+### Patch Changes
+
+- 6180156: `AGENTJAIL_SOCKET` is now honored. The documentation described it, but
+  `resolveSocketPath` did not read it.
+- 6180156: The CodeQL workflow could not close an alert marked by an inline suppression.
+  GitHub code scanning ignores the SARIF `suppressions` property, so the comment
+  alone did nothing, and the alert-suppression query was not in the default suite,
+  so the comment was not even parsed. The workflow now loads
+  `codeql/javascript-queries:AlertSuppression.ql` and runs
+  `advanced-security/dismiss-alerts` on `main` to dismiss the alerts the SARIF marks
+  as suppressed. This closes the remaining `js/http-to-file-access` alert.
+- b338b51: Daemon starts now pass `--socket`, `--db`, and `--log` explicitly and run under a
+  private `HOME`. Upstream's daemon does not read `AGENTJAIL_SOCKET`, so without the
+  flag it bound its own default socket and the plugin never reached the daemon it
+  started. The private `HOME` keeps a start from reaching a stale control plane left
+  behind by an unrelated AgentJail install.
+
+  Policy reload now goes through the daemon's privileged control socket and only for
+  a daemon this plugin started. Reloading an adopted daemon - or the wrong one, via
+  whatever control plane sits under the process `HOME` - is refused, and the plugin
+  reports why instead of guessing.
+
+- 6180156: The generated Rego templates were rejected by OPA: they used v0 syntax, mixed
+  statements into object literals, declared `deny_rules` in one shared package
+  across every template, and called a nonexistent `regex.find_all_stringify`. They
+  now render as valid Rego v1, one package per template, unioned by a generated
+  entrypoint, and are evaluated against a real OPA binary in CI.
+- 6180156: A release tag read from a redirect target was interpolated into a file name and a
+  URL path without validation. A crafted tag such as `../../etc/passwd` could steer
+  the archive write outside the install directory. `isSafeReleaseTag` now restricts
+  a tag to a release-tag shape, and the archive write asserts containment under the
+  working directory. This addresses CodeQL `js/http-to-file-access`.
+- b338b51: Fixed two lifecycle defects found while auditing unload behavior. `restart()`
+  left the supervisor reporting a managed daemon as `exited` after starting its
+  replacement, so the plugin disowned a daemon it was running and refused the next
+  policy reload as if the daemon belonged to someone else. The unload path now
+  drains queued audit appends before the plugin fiber is torn down, so an unload
+  followed immediately by process exit no longer drops the last records.
+- b338b51: Fixed a daemon supervision bug where a second `ensureDaemon` pass disowned a
+  daemon the plugin had started. The daemon kept running, but the plugin reported it
+  as external, so it stopped being stopped on unload and reload stopped being
+  attempted against it.
+- baf75a7: Make the supported platform set explicit instead of implied. The plugin runs
+  AgentJail from a build vendored per platform, and upstream publishes no Windows
+  build, so `package.json` now declares `os: [linux, darwin]` and
+  `cpu: [x64, arm64]` and npm refuses an unsupported platform at install time
+  rather than letting it fail silently at runtime. Loading on a platform with no
+  vendored build logs a warning naming the platform and the reason, so an operator
+  sees why every protected call is denied instead of inferring it from the denials.
+  CI now runs the suite and the real vendored binary on macOS, which was previously
+  a claimed platform that nothing ever exercised. That job immediately caught two
+  portability bugs the Linux-only suite could not see: archive extraction passed
+  `--wildcards` to `tar`, which GNU tar accepts and BSD tar rejects, so a managed
+  install failed on macOS; and a policy reload that fell back to restarting the
+  daemon probed once the instant the child was spawned instead of polling, so a
+  daemon that was merely still binding its socket was reported as unreachable.
+  Both are fixed and covered by tests. See `docs/INSTALL.md`.
+
 ## 0.1.0
 
 Released 2026-11-12.
